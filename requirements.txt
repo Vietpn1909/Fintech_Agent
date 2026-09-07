@@ -1,0 +1,34 @@
+# --- Cấu hình & tiện ích ---
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings>=2.7.0
+tenacity==9.0.0
+rich==13.9.4
+tqdm==4.67.1
+pandas==2.2.3
+
+# --- Tải & bóc tách dữ liệu SEC ---
+httpx==0.28.1
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# --- Cơ sở dữ liệu ---
+neo4j==5.27.0
+qdrant-client==1.12.2
+
+# --- Embedding: ONNX chạy CPU, không chiếm VRAM của LLM ---
+fastembed>=0.8.0
+mmh3>=5.3.0
+
+# --- LLM: LM Studio expose API tương thích OpenAI ---
+openai==1.59.6
+
+# --- Agent orchestration ---
+langgraph==0.2.61
+# Ghim >= vì RAGAS kéo theo langchain-core mới hơn. Đã kiểm tra:
+# langgraph 0.2.61 chạy tốt với langchain-core 0.3.86.
+langchain-core>=0.3.86
+
+# --- Giao diện ---
+streamlit==1.41.1
+grandalf==0.8

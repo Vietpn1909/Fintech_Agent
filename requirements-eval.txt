@@ -1,0 +1,5 @@
+# Cài riêng vì RAGAS kéo theo nhiều phụ thuộc nặng và hay xung đột version.
+# Chỉ cần khi chạy bước đánh giá (Bước 3).
+ragas==0.2.10
+datasets==3.2.0
+langchain-openai==0.2.14

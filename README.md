@@ -1,0 +1,377 @@
+# Agentic GraphRAG — Trợ lý Phân tích Doanh nghiệp & Đầu tư
+
+Hệ thống hỏi đáp trên hồ sơ tài chính SEC, kết hợp ba nguồn tri thức và để một agent tự
+chọn nguồn phù hợp với từng câu hỏi.
+
+| Nguồn | Dùng cho | Công nghệ |
+|---|---|---|
+| **XBRL lookup** | Câu hỏi tra số: *"Doanh thu NVIDIA FY2026?"* | Dữ liệu có cấu trúc của SEC |
+| **Vector search** | Câu hỏi tìm nội dung: *"NVIDIA nói gì về kiểm soát xuất khẩu?"* | Qdrant + bge-small |
+| **Graph search** | Câu hỏi bắc cầu: *"Rủi ro chuỗi cung ứng của NVIDIA lan sang Microsoft qua đường nào?"* | Neo4j |
+
+## Kiến trúc phủ dữ liệu ba tầng
+
+Ba loại tri thức có chi phí mở rộng chênh nhau hàng nghìn lần, nên **không thể phủ cả
+ba ở cùng một quy mô**. Đây là quyết định kiến trúc trung tâm của dự án:
+
+| Tầng | Độ phủ | Chi phí | Vì sao dừng ở đó |
+|---|---|---|---|
+| **Số liệu** | **6.074 doanh nghiệp** | 1 file bulk 1,41GB · 11 giây xử lý · **0 lần gọi LLM** | Không có nhược điểm nào. Phủ hết. |
+| **Văn bản** | ~48–500 doanh nghiệp | ~17 chunk/giây · 20 phút đến 3,5 giờ | Phủ 6.000 công ty làm **giảm** độ chính xác: mục Risk Factors là ngôn ngữ pháp lý sao chép nhau, top-k sẽ đầy small cap nói cùng một câu vô nghĩa. |
+| **Đồ thị** | ~48 doanh nghiệp | 1 lần gọi LLM mỗi chunk · hàng giờ GPU | Phủ 6.000 công ty mất **~50 ngày GPU**. Và đồ thị mỏng trải rộng suy luận **kém hơn** đồ thị dày trong một hệ sinh thái — sức mạnh nằm ở cạnh nối, mà 6.000 công ty ngẫu nhiên gần như không nhắc tên nhau. |
+
+### Nạp theo yêu cầu — thứ khiến độ phủ thực tế là toàn bộ
+
+Khi agent bị hỏi về doanh nghiệp chưa có trong index văn bản, nó **tự đi lấy ngay trong
+lúc trả lời**: tải 10-K, bóc tách, nhúng vector, rồi trả lời. Đo thật: **36–45 giây**.
+
+Đây cũng là ranh giới giữa "RAG có thêm bộ định tuyến" và "agent thật" — agent nhận ra
+mình thiếu thông tin và tự hành động để bù đắp, thay vì trả lời rằng không biết.
+
+Hệ quả: độ phủ thực tế là **toàn bộ 8.001 doanh nghiệp**, chỉ khác nhau ở độ trễ lần
+đầu. Mỗi node `Company` mang trường `tier` (`metrics` / `text` / `graph`) để agent biết
+mình đang có gì và nói thật với người dùng.
+
+### "Toàn thế giới" tới đâu?
+
+SEC không chỉ có doanh nghiệp Mỹ. Mọi tập đoàn lớn ngoài Mỹ có niêm yết ADR đều nộp hồ
+sơ: **TSMC, Toyota, SAP, Alibaba, Shell, Novo Nordisk, ASML, Sony, Unilever, BHP, HSBC,
+AstraZeneca, TotalEnergies, Infosys...** — đều tra được.
+
+Nằm ngoài tầm với: doanh nghiệp **không niêm yết tại Mỹ** (Vingroup, Bosch, Huawei,
+phần lớn doanh nghiệp Việt Nam). Đó là giới hạn của nguồn dữ liệu, không phải của code —
+muốn phủ thì phải thêm nguồn khác (HNX/HOSE, Companies House...).
+
+## Chọn lọc chunk trước khi gọi LLM — tối ưu quan trọng nhất của tầng đồ thị
+
+Chạy dàn trải toàn bộ 4.748 chunk mất ~6 giờ GPU. Đo trên 336 bộ ba đầu tiên cho thấy
+tiền đang tiêu sai chỗ:
+
+| | Chạy dàn trải | Sau khi lọc |
+|---|---|---|
+| Số chunk phải chạy | 4.748 | **823** (giảm 83%) |
+| Thời gian | ~6 giờ | **~1,1 giờ** |
+| Cạnh **Company→Company** | 3,6% | **31%** (10 chunk đầu: 79%) |
+| Cạnh `EXPOSED_TO_RISK` | 54% | 16% |
+| Bộ ba mỗi chunk | 3,3 | 4,8 |
+
+Đồ thị vừa nhanh hơn 5,5 lần vừa **dày hơn ở đúng chỗ cần**. Không phải đánh đổi — trước
+đó phần lớn GPU tiêu vào những đoạn văn không có gì để trích.
+
+**Điều kiện lọc là một CỔNG CHẶN, không phải điểm số.** Bản đầu tiên cộng điểm cho tên tổ
+chức rồi so ngưỡng, và một đoạn nói lan man *"competition is intense"*, *"we rely on
+suppliers"* mà không nêu tên ai vẫn lọt qua nhờ điểm từ khóa. Nhưng đoạn như vậy **không
+thể** sinh ra cạnh giữa hai công ty — không có công ty thứ hai để nối. Không có tên riêng
+thì không có cạnh; đó là điều kiện cần, nên phải chặn chứ không phải cộng điểm.
+
+Chunk được **sắp xếp theo điểm giảm dần**. Chạy theo thứ tự chữ cái thì NVIDIA và TSMC nằm
+gần cuối — đúng những công ty cần nhất cho câu hỏi bắc cầu lại phải chờ lâu nhất. Sắp xếp
+lại nghĩa là dừng ở bất kỳ đâu thì phần giá trị nhất cũng đã xong.
+
+## Vì sao tách riêng XBRL
+
+Điểm yếu chí mạng của mọi hệ RAG tài chính là **con số**. LLM đọc bảng biểu đã bị làm
+phẳng thành văn bản rất dễ lấy nhầm cột năm, nhầm đơn vị, hoặc bịa ra số nghe hợp lý.
+
+Ở đây LLM **không bao giờ đọc số từ văn bản**. Mọi con số đến từ file XBRL do chính
+doanh nghiệp khai và nộp cho SEC, mỗi con số gắn với mã `us-gaap`, kỳ báo cáo và số hiệu
+bản khai truy vết được. Agent tra số bằng tra cứu từ điển, không suy đoán.
+
+---
+
+## Cài đặt
+
+```bash
+docker compose up -d
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+Mở `.env` và điền `SEC_USER_AGENT` bằng **tên + email thật** — SEC trả về 403 cho mọi
+request không khai danh tính (Fair Access Policy).
+
+Bật LM Studio → tab **Developer** → **Start Server**, đặt **Context Length ≥ 16384**
+(mặc định 4096 sẽ cắt cụt chunk và làm hỏng bước trích xuất đồ thị).
+
+## Chạy pipeline
+
+```bash
+.venv/Scripts/python.exe scripts/00_benchmark_llm.py
+```
+Đo tốc độ thực tế của model đang nạp rồi điền `LLM_EXTRACTION_MODEL` và
+`LLM_REASONING_MODEL` trong `.env` theo số đo. **Đừng bỏ qua** — chênh lệch giữa 8 tok/s
+và 40 tok/s là chênh lệch giữa chạy qua đêm và chạy trong một tiếng.
+
+```bash
+# --- Tầng số liệu: toàn bộ 6.074 doanh nghiệp, không cần LLM ---
+curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
+     https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip
+.venv/Scripts/python.exe scripts/05_load_full_universe.py --workers 8
+
+# --- Tầng văn bản ---
+.venv/Scripts/python.exe scripts/06_build_text_index.py --tier ecosystem
+.venv/Scripts/python.exe scripts/06_build_text_index.py --top-revenue 500   # tùy chọn
+
+# --- Tầng đồ thị (cần LM Studio) ---
+.venv/Scripts/python.exe scripts/04_build_knowledge_graph.py --limit 10   # chạy thử
+.venv/Scripts/python.exe scripts/04_build_knowledge_graph.py --resume     # chạy thật
+
+# --- Đánh giá ---
+.venv/Scripts/python.exe scripts/07_build_testset.py                 # sinh 34 câu hỏi
+.venv/Scripts/python.exe scripts/08_run_eval.py --numeric-only       # chấm xác định
+.venv/Scripts/python.exe scripts/08_run_eval.py                      # thêm RAGAS
+
+# --- Giao diện ---
+.venv/Scripts/python.exe -m streamlit run app/streamlit_app.py
+```
+
+Xem đồ thị: <http://localhost:7474> (neo4j / fintech123) · Qdrant: <http://localhost:6333/dashboard>
+
+---
+
+## Trạng thái hiện tại
+
+| Bước | Trạng thái | Kết quả đã kiểm chứng |
+|---|---|---|
+| Tải dữ liệu SEC | ✅ | 8 bản 10-K + bulk XBRL 1,41GB (20.303 doanh nghiệp) |
+| Bóc tách theo Item | ✅ | 2,25 triệu ký tự sạch, 8/8 bản khai đúng |
+| Trích xuất XBRL | ✅ | **38.887 bản ghi năm · 4.295 doanh nghiệp có số liệu** |
+| Đồ thị nền | ✅ | **6.074 Company · 38.887 FinancialYear** |
+| Vector index | ✅ | **22.389 chunk · 42 doanh nghiệp** + nạp theo yêu cầu (36–45 giây/công ty) |
+| Phân giải tên công ty | ✅ | Khớp theo ranh giới từ, neo vào CIK, chịu được gõ sai |
+| Bộ công cụ agent | ✅ | 7 công cụ, kiểm thử trên dữ liệu thật, không gọi LLM |
+| Sơ đồ trạng thái LangGraph | ✅ | Biên dịch chạy được, có vòng lặp suy xét |
+| Bộ câu hỏi kiểm thử | ✅ | **34 câu** sinh từ dữ liệu thật (23 chấm xác định + 11 RAGAS) |
+| Bộ chấm dò số | ✅ | 12/12 ca kiểm thử, nhận 6 cách viết số khác nhau |
+| Giao diện Streamlit | ✅ | Chạy tại `localhost:8501`, hiển thị dấu vết suy luận |
+| Đồ thị tri thức | ✅ | **2.567 bộ ba · 265 doanh nghiệp có cạnh · 14/14 loại quan hệ** |
+| Gộp thực thể | ✅ | 176 node trùng đã gộp; neo theo CIK nên nạp lại không sinh trùng |
+| Agent đầu-cuối | ✅ | **26/26 = 100% độ chính xác số liệu** · recall thực thể 100% ở 4/5 nhóm |
+| Đa tiền tệ | ✅ | USD, EUR, JPY, TWD, CNY, DKK... có chặn trộn lẫn khi so sánh |
+| Chấm điểm RAGAS | ⏳ | Tùy chọn — thước đo dò số đã đủ mạnh và không cần LLM giám khảo |
+
+---
+
+## Bảy cái bẫy đã gặp thật khi xử lý dữ liệu SEC
+
+Ghi lại vì đây là loại lỗi âm thầm — không báo lỗi, chỉ lặng lẽ cho ra kết quả sai.
+
+### 1. Trường `fy` trong XBRL không phải năm của số liệu
+
+Nó là năm của **bản khai** chứa số liệu đó. Mỗi bản 10-K trình bày 3 năm để so sánh, nên
+cùng một `fy=2024` có cả số của FY2022, FY2023 và FY2024:
+
+```
+fy=2024  end=2022-09-24  val=394,33B   <- FY2022
+fy=2024  end=2023-09-30  val=383,29B   <- FY2023
+fy=2024  end=2024-09-28  val=391,04B   <- FY2024 (đúng)
+```
+
+### 2. Doanh nghiệp đổi mã khai báo giữa chừng
+
+NVIDIA khai doanh thu bằng `RevenueFromContractWithCustomerExcludingAssessedTax` cho các
+năm cũ rồi chuyển sang `Revenues`; Alphabet đi ngược lại. Duyệt danh sách mã ưu tiên rồi
+**dừng ở mã đầu tiên có dữ liệu** sẽ khóa vào đúng cái mã đã bị bỏ dùng và mất trắng
+những năm gần nhất. Phải **gộp dữ liệu của tất cả các mã theo từng năm**.
+
+### 3. Không có quy tắc ngày tháng nào suy ra được năm tài chính
+
+Cái bẫy này chỉ lộ ra khi mở rộng từ 4 lên 6.000 doanh nghiệp:
+
+```
+Walmart     kết thúc 31/01/2025 -> họ gọi là fiscal 2025   (theo năm KẾT THÚC)
+NVIDIA      kết thúc 26/01/2025 -> họ gọi là fiscal 2025   (theo năm KẾT THÚC)
+Target      kết thúc 01/02/2025 -> họ gọi là fiscal 2024   (theo năm BẮT ĐẦU)
+Home Depot  kết thúc 02/02/2025 -> họ gọi là fiscal 2024   (theo năm BẮT ĐẦU)
+```
+
+Bốn doanh nghiệp, ngày kết thúc chênh nhau hai ngày, hai cách đặt tên ngược nhau. Lấy
+năm của ngày kết thúc khiến Target và Home Depot lệch một năm.
+
+**Cách lấy đúng:** trong mỗi bản khai, kỳ có ngày kết thúc muộn nhất chính là kỳ mà `fy`
+đang mô tả. Gán `fy` của bản khai cho kỳ đó, làm vậy cho mọi bản khai của doanh nghiệp →
+mỗi năm được gán đúng cái tên mà chính doanh nghiệp dùng.
+
+### 4. Không phải 10-K nào cũng đánh số Item
+
+Intel viết báo cáo theo lối tường thuật với tiêu đề mô tả thuần túy ("Risk Factors"),
+rồi đặt một bảng "Form 10-K Cross-Reference Index" ở **cuối** tài liệu trỏ Item sang số
+trang. SEC chấp nhận cách này. Bộ tách theo Item gặp bản khai như vậy trả về gần như
+rỗng → **Intel biến mất khỏi hệ thống trong im lặng**, không một thông báo lỗi.
+
+Cách xử lý: ba chiến lược theo thứ tự tin cậy giảm dần — tách theo số hiệu Item, rồi
+tách theo tiêu đề mô tả, cuối cùng coi cả tài liệu là một mục. Thà mất nhãn mục còn hơn
+mất cả doanh nghiệp.
+
+### 5. Model có bước suy nghĩ trả token vào một luồng KHÁC
+
+Gemma 4, Qwen3, DeepSeek-R1 sinh ra hai luồng token riêng: `reasoning_content` (phần tự
+lẩm bẩm) và `content` (câu trả lời thật). Code đọc `content` sẽ nhận chuỗi rỗng.
+
+Đo thật với Gemma 4 26B, câu hỏi *"Say hello in 5 words"*:
+
+```
+max_tokens=50   ->  47 token suy nghĩ,   0 token nội dung, content RỖNG
+max_tokens=800  -> 506 token suy nghĩ,  12 token nội dung
+```
+
+Tỷ lệ lãng phí 42:1. Và nếu `max_tokens` quá chặt, model tiêu hết ngân sách cho phần suy
+nghĩ rồi bị cắt trước khi kịp trả lời — **trả về rỗng mà không báo lỗi gì**. Benchmark đầu
+tiên của tôi vì thế báo *0 tok/s* cho một model đang chạy hoàn toàn bình thường.
+
+Cách xử lý: `reasoning_effort="none"` cho việc máy móc (trích xuất JSON, định tuyến —
+nhanh gấp **7,5 lần** và còn trích được nhiều quan hệ hơn), giữ suy nghĩ cho khối viết câu
+trả lời cuối. Thêm kiểm tra: `content` rỗng + `finish_reason=length` thì ném lỗi thay vì
+im lặng trả về chuỗi rỗng.
+
+### 6. Model dịch tên thực thể sang tiếng Việt
+
+Tìm thấy node rủi ro `"gián đoạn chuỗi cung ứng"` nằm lẫn giữa các tên tiếng Anh. Cùng một
+khái niệm thành hai node rời, đồ thị đứt mạch mà không có dấu hiệu gì. Chặn ở tầng kiểm
+tra bằng regex ký tự có dấu, kèm luật trong prompt cấm dịch tên.
+
+### 7. Tiêu đề mục bị ngắt dòng giữa từ
+
+Microsoft đặt tiêu đề trong ô bảng và HTML ngắt dòng ngay giữa một từ (`ITEM 1A. RIS` /
+`K FACTORS`). So khớp chuỗi thô sẽ trượt và mất trắng mục Risk Factors dài 61k ký tự.
+Phải so khớp sau khi **bỏ hết ký tự không phải chữ/số**.
+
+---
+
+## Kết quả đánh giá
+
+Bộ 37 câu hỏi, model `gemma-4-26b-a4b-qat` chạy local:
+
+| Nhóm câu hỏi | Số câu | Độ chính xác số | Recall thực thể |
+|---|---|---|---|
+| Tra số liệu | 24 | **100%** | 96% |
+| So sánh doanh nghiệp | 2 | **100%** | 100% |
+| Sàng lọc toàn thị trường | 3 | — | 100% |
+| Định tính (văn bản) | 5 | — | 100% |
+| Bắc cầu (đồ thị) | 3 | — | 100% |
+
+**Độ chính xác số liệu tổng thể: 26/26 = 100%** (sai số cho phép 1%).
+
+Con số này có ý nghĩa vì nó được chấm **không dùng LLM giám khảo** — chỉ dò xem con số
+doanh nghiệp khai với SEC có xuất hiện trong câu trả lời hay không.
+
+### Tối ưu độ trễ: từ 275 giây xuống 78 giây
+
+Một câu hỏi bắc cầu ban đầu mất 275 giây. Phân rã ra thì **truy vấn cơ sở dữ liệu chỉ
+tốn 0,5 giây** — 99,7% thời gian là gọi LLM.
+
+| Câu hỏi | Trước | Sau | |
+|---|---|---|---|
+| Tra số liệu | 87s | **29s** | −66% |
+| Bắc cầu (đồ thị) | 275s | **78s** | −72% |
+| Sàng lọc | 250s | **60s** | −76% |
+
+Ba thay đổi, xếp theo mức đóng góp:
+
+**1. Tắt bước suy nghĩ ở khối trả lời.** Đây là đòn bẩy lớn nhất, và nó lật ngược giả
+định ban đầu của tôi. Đo một lần gọi trực tiếp:
+
+```
+không gửi tham số      27,1s | 314 token sinh ra, 276 trong đó là token SUY NGHĨ
+reasoning_effort=none   4,5s |  41 token, 0 suy nghĩ
+```
+
+Model tiêu **88% ngân sách token để tự lẩm bẩm**. Đặt hai câu trả lời cạnh nhau thì bản
+không suy nghĩ còn trình bày tốt hơn — tự lập bảng markdown, phép tính y hệt.
+
+Lưu ý quan trọng: `minimal` và `low` **không giảm** suy nghĩ với model này (333 và 312
+token, gần bằng mặc định). Chỉ `none` mới thực sự tắt.
+
+Đây cũng là lời giải cho biến động **3,4 lần trên cùng một câu hỏi** (128s/175s/440s/164s):
+khi ngữ cảnh lớn, phần suy nghĩ ăn hết `max_tokens` rồi bị cắt trước khi kịp viết, buộc
+tầng dưới gọi lại.
+
+**2. Suy xét là đường ngoại lệ, không phải đường mặc định.** Thiết kế ban đầu cho mọi câu
+đi qua khối suy xét. Đo được: 11 giây chỉ để kết luận "đủ rồi" cho câu mà công cụ đã trả
+`ok` ngay vòng đầu. Giờ chỉ chạy khi có công cụ lỗi hoặc không tìm thấy dữ liệu.
+
+**3. `parallel 1` thay vì 4 trong LM Studio.** Nạp prompt 12.036 ký tự: 50,1s → 33,1s.
+
+### Một chẩn đoán sai đáng ghi lại
+
+Tôi kết luận "model tràn khỏi VRAM". Lấy mẫu GPU trong lúc chạy thật cho thấy ngược lại:
+
+```
+VRAM        15.839 / 16.303 MiB   model nằm TRỌN trên GPU
+Utilization 98-99%                chạy hết công suất
+Power       68,7 W                rất thấp (card ~300W)
+```
+
+98% bận nhưng chỉ ăn 69W nghĩa là **nghẽn băng thông bộ nhớ**, không nghẽn tính toán —
+đặc trưng cố hữu của kiến trúc MoE, không phải lỗi cấu hình. Bài học: đừng kết luận
+nguyên nhân phần cứng khi chưa lấy mẫu đúng lúc tải.
+
+### Năm lần chạy, năm nhóm lỗi
+
+Không lần nào là lãng phí — mỗi lần lộ ra lỗi thật mà đọc code không thấy được:
+
+| Lần | Kết quả | Lỗi phát hiện |
+|---|---|---|
+| 1 | 91,3% | Bộ chấm mù số âm · **`MAX_ROUNDS` không có tác dụng, agent lặp tới giới hạn đệ quy** · model tiêu hết token cho phần suy nghĩ |
+| 2 | 100% | **Bộ lọc `items` sai kiểu (số nguyên vs chuỗi) làm chết toàn bộ 5 câu định tính** |
+| 3 | 100% | `find_entity` trả về Product thay vì Company · thiếu form 20-F và chuẩn IFRS |
+| 4 | 0% (sàng lọc) | **Trộn đồng tiền: Ecopetrol (peso) xếp trên Walmart** |
+| 5 | 100% | — |
+| 6 | 96,2% → **100%** | Dấu ngoặc chú thích bị đọc thành số âm (lỗi bộ chấm, agent đúng) |
+
+Điểm chung của cả năm: **không lỗi nào ném ra ngoại lệ**. Hệ thống vẫn chạy, vẫn trả lời,
+chỉ là trả lời sai — hoặc trả lời "không tìm thấy" về dữ liệu nằm ngay trong index.
+
+## Đánh giá: hai thước đo, không phải một
+
+Nếu chỉ báo cáo điểm RAGAS, câu hỏi đầu tiên của hội đồng sẽ là *"giám khảo là model
+nào?"* — và câu trả lời "chính model đang được đánh giá" làm suy yếu toàn bộ kết luận.
+Dùng công cụ đang cần đánh giá để tự chấm mình là một lỗi phương pháp luận.
+
+Vì vậy dự án dùng **hai thước đo độc lập**:
+
+| Thước đo | Số câu | Cần LLM giám khảo? | Đo cái gì |
+|---|---|---|---|
+| **Dò số** | 23 | **Không** | Câu trả lời có chứa đúng con số doanh nghiệp khai với SEC không (sai số 1%) |
+| RAGAS | 11 | Có | faithfulness, answer_relevancy, context_precision/recall |
+
+Câu hỏi tra số được **sinh tự động từ chính dữ liệu XBRL**, nên đáp án chuẩn là con số
+chính xác chứ không phải đoạn văn tham chiếu viết tay — muốn bao nhiêu câu cũng có, và
+không ai tranh cãi được kết quả. Điểm RAGAS chỉ nên dùng để **so sánh giữa các cấu
+hình** (có đồ thị / không đồ thị, top_k khác nhau), không đọc như đánh giá tuyệt đối.
+
+Bộ dò số nhận được sáu cách viết khác nhau của cùng một con số — `215.938.000.000`,
+`215,938,000,000`, `215,94 tỷ`, `215.94 billion`, `khoảng 216 tỷ`, và cả dạng thiếu dấu
+`215,94 ty` mà model local hay trả về. Bỏ sót một dạng là đánh trượt câu trả lời đúng và
+tạo ra điểm số bi quan sai lệch, còn tệ hơn không đo.
+
+## Cấu trúc mã nguồn
+
+```
+config/settings.py          Cấu hình tập trung, đọc từ .env
+src/ingest/
+    edgar.py                Tải 10-K + XBRL, tuân thủ rate limit của SEC
+    universe.py             Quản lý vũ trụ doanh nghiệp và ba mức phủ
+    parser.py               HTML -> văn bản -> chia theo Item
+    chunker.py              Hai cách cắt chunk cho hai mục đích
+    xbrl.py                 Trích xuất số liệu chính xác + xử lý ba cái bẫy ở trên
+    on_demand.py            Phân giải tên công ty + nạp dữ liệu ngay khi cần
+    pipeline.py             Ghép các bước trên thành một đường đi chung
+src/vector/store.py         Qdrant + fastembed (CPU đa nhân, không tranh VRAM)
+src/graph/
+    schema.py               Ontology đóng + chuẩn hóa thực thể
+    selector.py             Lọc & xếp hạng chunk trước khi gọi LLM (giảm 83% chi phí)
+    extractor.py            Prompt trích xuất + kiểm tra kết quả
+    store.py                Neo4j: nạp dữ liệu và các truy vấn cho agent
+src/agent/
+    tools.py                7 công cụ, Cypher viết sẵn và tham số hóa (không để LLM sinh)
+    graph_agent.py          Sơ đồ trạng thái LangGraph: định tuyến -> thực thi -> suy xét
+src/eval/
+    testset.py              Sinh câu hỏi từ dữ liệu thật + câu hỏi định tính viết tay
+    grader.py               Chấm dò số, xác định, không dùng LLM
+    ragas_runner.py         RAGAS với model local (embedding chạy CPU, một luồng)
+src/llm/client.py           LM Studio qua API tương thích OpenAI, ép JSON schema
+app/streamlit_app.py        Giao diện chat, phơi bày dấu vết suy luận của agent
+scripts/                    Các bước chạy, đánh số theo thứ tự
+```
