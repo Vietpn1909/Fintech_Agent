@@ -1,4 +1,12 @@
-"""Giao diện Streamlit cho trợ lý phân tích doanh nghiệp.
+"""Giao diện Streamlit — BẢN CŨ, đã được thay bằng web/ (FastAPI).
+
+⚠️ Dùng `run_web.py` cho mọi việc trình diễn và triển khai. File này giữ lại vì nó vẫn
+tiện để gỡ lỗi nhanh một thay đổi trong agent mà không cần mở trình duyệt qua HTTP.
+
+Streamlit chạy lại toàn bộ script mỗi lần tương tác nên không thể hiện từng bước của
+agent trong lúc nó chạy — người dùng nhìn màn hình trắng 18-78 giây. Nó cũng cần
+WebSocket riêng nên khó đặt sau reverse-proxy/CDN. Xem mục "Giao diện web" trong README.
+
 
 Điểm khác biệt so với một khung chat thông thường: giao diện này PHƠI BÀY quá trình suy
 luận của agent — nó đã gọi công cụ nào, với tham số gì, mất bao lâu, và có phải tự đi

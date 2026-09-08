@@ -122,11 +122,93 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/08_run_eval.py --numeric-only       # chấm xác định
 .venv/Scripts/python.exe scripts/08_run_eval.py                      # thêm RAGAS
 
-# --- Giao diện ---
-.venv/Scripts/python.exe -m streamlit run app/streamlit_app.py
+# --- Giao diện web ---
+.venv/Scripts/python.exe run_web.py          # mo http://localhost:8000
+.venv/Scripts/python.exe run_web.py --lan    # cho may khac trong mang LAN xem
 ```
 
 Xem đồ thị: <http://localhost:7474> (neo4j / fintech123) · Qdrant: <http://localhost:6333/dashboard>
+
+---
+
+## Giao diện web
+
+`http://localhost:8000` — một trang duy nhất gồm phần giới thiệu (dùng cho PR, quảng bá,
+slide bảo vệ) và khung demo hoạt động thật.
+
+### Vì sao bỏ Streamlit
+
+Bản đầu dùng Streamlit. Nó tiện để dựng nhanh nhưng hỏng ở ba điểm đúng lúc cần nhất:
+
+| | Streamlit | FastAPI + trang tĩnh |
+|---|---|---|
+| Hiện tiến trình khi agent đang chạy | không — chỉ vẽ sau khi `ask()` trả về, tức là sau 18–78 giây màn hình trắng | có — mỗi bước hiện ngay khi bước đó xong, qua SSE |
+| Nhúng phần giới thiệu | không, nó chiếm trọn cửa sổ | có, cùng một trang |
+| Deploy | cần WebSocket riêng, phiên bám vào tiến trình, khó đặt sau CDN/reverse-proxy | HTTP thuần, trang tĩnh đẩy lên CDN nào cũng được |
+
+Nguyên nhân gốc là mô hình thực thi: Streamlit chạy lại **toàn bộ file** mỗi lần người
+dùng chạm vào bất cứ thứ gì. Với một agent chạy hàng chục giây, mô hình đó không diễn tả
+được trạng thái "đang làm dở".
+
+### Hai trang, hai việc
+
+| Trang | Việc duy nhất của nó |
+|---|---|
+| `/` — trang chủ | Người mới vào hiểu agent biết những gì, trả lời được loại câu hỏi nào, hoạt động ra sao, và vì sao tin được kết quả. Kết thúc bằng một nút dẫn sang trang chat. |
+| `/chat` — trò chuyện | Chỉ có hội thoại. Không bảng số liệu, không sơ đồ, không gì để đọc ngoài câu trả lời. |
+
+Gộp cả hai vào một trang là sai ở cả hai chiều: người vào lần đầu phải cuộn qua ô nhập
+mới đọc được phần giới thiệu, còn người quay lại lần thứ hai phải cuộn qua phần giới
+thiệu mới tới được ô nhập.
+
+Dấu vết suy luận vẫn giữ ở trang chat, nhưng **gấp lại** dưới mỗi câu trả lời
+(*"Trợ lý đã làm gì · 3 truy vấn · 42s · 2 vòng"*). Nó là điểm mạnh của hệ thống nên
+không bỏ được, nhưng người dùng bình thường không cần nhìn — ai muốn xem thì bấm mở.
+
+### Có gì trong đó
+
+- **Dấu vết suy luận** — định tuyến chọn công cụ nào, mỗi công cụ nhận tham số gì, truy
+  vấn nguồn nào, mất bao lâu, khối suy xét kết luận đủ hay phải quay lại. Với hội đồng
+  chấm, phần này quan trọng ngang câu trả lời: nó chứng minh hệ thống **thực sự định
+  tuyến** chứ không phải truy hồi một lần rồi nhét hết vào prompt.
+- **Số liệu độ phủ lấy trực tiếp từ Neo4j và Qdrant**, không phải số viết cứng.
+- **Đèn trạng thái** trên thanh điều hướng, kiểm tra ba phụ thuộc **riêng biệt** — thiếu
+  cái nào nó nói tên cái đó và lệnh cần chạy, thay vì một chữ "lỗi" chung chung.
+- **Tra độ phủ một doanh nghiệp** trước khi hỏi, để biết công ty đó đang ở tầng nào.
+- **Xếp hàng tường minh**: model local phục vụ tuần tự, nên câu hỏi thứ hai được báo
+  "đang xếp hàng, còn N câu phía trước" thay vì để người dùng nhìn màn hình đứng im.
+
+### API
+
+| Điểm cuối | Việc |
+|---|---|
+| `GET /api/health` | trạng thái Neo4j / Qdrant / LM Studio, tách riêng từng cái |
+| `GET /api/stats` | số liệu độ phủ (cache 60 giây) |
+| `GET /api/coverage?q=` | hệ thống đang có gì về một doanh nghiệp |
+| `POST /api/ask` | hỏi, nhận luồng SSE từng bước |
+| `POST /api/ask-sync` | hỏi, nhận một JSON khi xong — cho tích hợp máy-với-máy |
+| `GET /` · `GET /chat` | hai trang giao diện |
+
+Tài liệu tự sinh: `http://localhost:8000/docs`
+
+### Deploy
+
+Ràng buộc quyết định mọi thứ: **mô hình ngôn ngữ chạy trên GPU của máy này**. Máy chủ web
+phải nằm ở nơi gọi được LM Studio, nên không thể đẩy toàn bộ lên một dịch vụ đám mây
+thông thường.
+
+```bash
+# Trong mạng LAN — đủ cho demo trước lớp hoặc hội đồng
+.venv/Scripts/python.exe run_web.py --lan
+
+# Mở ra Internet tạm thời, giữ máy chủ ở lại máy có GPU
+cloudflared tunnel --url http://localhost:8000
+```
+
+Nếu cần một trang giới thiệu **luôn online**: `web/static/` là HTML/CSS/JS thuần, không
+có bước build, đẩy thẳng lên GitHub Pages hay bất kỳ CDN nào cũng chạy. Chỉ phần demo cần
+máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của tunnel là xong (CORS
+đã mở sẵn ở `web/server.py`).
 
 ---
 
@@ -144,7 +226,7 @@ Xem đồ thị: <http://localhost:7474> (neo4j / fintech123) · Qdrant: <http:/
 | Sơ đồ trạng thái LangGraph | ✅ | Biên dịch chạy được, có vòng lặp suy xét |
 | Bộ câu hỏi kiểm thử | ✅ | **34 câu** sinh từ dữ liệu thật (23 chấm xác định + 11 RAGAS) |
 | Bộ chấm dò số | ✅ | 12/12 ca kiểm thử, nhận 6 cách viết số khác nhau |
-| Giao diện Streamlit | ✅ | Chạy tại `localhost:8501`, hiển thị dấu vết suy luận |
+| Giao diện web | ✅ | FastAPI tại `localhost:8000` — trang giới thiệu + demo, stream dấu vết agent theo thời gian thực |
 | Đồ thị tri thức | ✅ | **2.567 bộ ba · 265 doanh nghiệp có cạnh · 14/14 loại quan hệ** |
 | Gộp thực thể | ✅ | 176 node trùng đã gộp; neo theo CIK nên nạp lại không sinh trùng |
 | Agent đầu-cuối | ✅ | **26/26 = 100% độ chính xác số liệu** · recall thực thể 100% ở 4/5 nhóm |
@@ -372,6 +454,14 @@ src/eval/
     grader.py               Chấm dò số, xác định, không dùng LLM
     ragas_runner.py         RAGAS với model local (embedding chạy CPU, một luồng)
 src/llm/client.py           LM Studio qua API tương thích OpenAI, ép JSON schema
-app/streamlit_app.py        Giao diện chat, phơi bày dấu vết suy luận của agent
+web/server.py               FastAPI: API JSON + phục vụ trang tĩnh + streaming SSE
+web/static/index.html       Trang chủ: agent biết gì, hỏi được gì, hoạt động ra sao
+web/static/chat.html        Trang trò chuyện, không có gì ngoài hội thoại
+web/static/styles.css       Hệ thiết kế dùng chung: màu, nút, chuyển động
+web/static/chat.css         Riêng cho trang trò chuyện
+web/static/home.js          Hiện dần khi cuộn, đếm số, đổ số liệu thật vào trang
+web/static/chat.js          Đọc SSE, dựng Markdown, gấp dấu vết agent lại
+run_web.py                  Kiểm tra phụ thuộc rồi khởi động máy chủ
+app/streamlit_app.py        (cũ) Giao diện Streamlit — giữ lại để gỡ lỗi, xem mục Giao diện web
 scripts/                    Các bước chạy, đánh số theo thứ tự
 ```

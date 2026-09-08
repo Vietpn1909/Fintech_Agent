@@ -29,6 +29,12 @@ langgraph==0.2.61
 # langgraph 0.2.61 chạy tốt với langchain-core 0.3.86.
 langchain-core>=0.3.86
 
-# --- Giao diện ---
-streamlit==1.41.1
+# --- Giao diện web ---
+# FastAPI phục vụ cả API JSON lẫn trang tĩnh. Chọn nó thay Streamlit vì Streamlit chạy
+# lại toàn bộ script mỗi lần tương tác nên không stream được từng bước của agent, và
+# vì nó cần WebSocket riêng nên khó đặt sau reverse-proxy/CDN khi deploy.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# grandalf: vẽ sơ đồ LangGraph ra ASCII khi gỡ lỗi
 grandalf==0.8

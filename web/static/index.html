@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only light">
+<title>FinGraph — Trợ lý Phân tích Doanh nghiệp &amp; Đầu tư</title>
+<meta name="description" content="Agentic GraphRAG trên dữ liệu SEC EDGAR. Số liệu tài chính không bao giờ đi qua mô hình ngôn ngữ — 100% chính xác trên bộ kiểm thử.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<!-- Hình khối dùng lại nhiều nơi. Định nghĩa một lần ở đây, gọi bằng <use>. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="gBrand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/><stop offset="48%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="gMint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <symbol id="logo" viewBox="0 0 32 32">
+      <rect x="1" y="1" width="30" height="30" rx="9" fill="url(#gBrand)"/>
+      <circle cx="10" cy="11" r="3" fill="#fff"/><circle cx="22" cy="9" r="2.4" fill="#fff" opacity=".85"/>
+      <circle cx="21" cy="22" r="3.4" fill="#fff"/><circle cx="10" cy="22" r="2.2" fill="#fff" opacity=".7"/>
+      <path d="M10 11 L22 9 M10 11 L21 22 M21 22 L10 22" stroke="#fff" stroke-width="1.5" opacity=".75" fill="none"/>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top"><svg class="brand-mark"><use href="#logo"/></svg><span>FinGraph</span></a>
+    <nav class="nav-links">
+      <a href="#knows">Agent biết gì</a>
+      <a href="#ask">Hỏi được gì</a>
+      <a href="#how">Cách hoạt động</a>
+      <a href="#trust">Vì sao tin được</a>
+    </nav>
+    <div class="status" id="status"><span class="dot dot-idle"></span><span>đang kiểm tra…</span></div>
+    <a class="btn btn-primary nav-cta" href="/chat">Dùng thử</a>
+  </div>
+</header>
+
+<!-- ════════════════════════════════════════════════════ hero -->
+<section class="hero" id="top">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <div class="badge"><span class="dot"></span>Agentic GraphRAG · dữ liệu SEC EDGAR · chạy hoàn toàn trên máy local</div>
+        <h1>Hỏi về doanh nghiệp.<br><span class="grad">Nhận số liệu thật, không phải số bịa.</span></h1>
+        <p class="lede">
+          Trợ lý phân tích đọc báo cáo thường niên của <strong data-stat="companies">6.255</strong>
+          doanh nghiệp niêm yết tại Mỹ. Mọi con số lấy trực tiếp từ hồ sơ đã nộp cho Ủy ban
+          Chứng khoán — <strong>mô hình ngôn ngữ không bao giờ được tự đọc số</strong>.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-lg" href="/chat">
+            Dùng thử ngay
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+          <a class="btn btn-ghost btn-lg" href="#knows">Xem nó biết những gì</a>
+        </div>
+        <p class="cta-note" style="margin-top:14px">Miễn phí · không cần đăng nhập · mở ra trang trò chuyện riêng</p>
+      </div>
+
+      <!-- ĐỒ THỊ TRI THỨC ĐANG SỐNG.
+           Nét nối chạy liên tục và các gói dữ liệu di chuyển dọc theo cạnh — đây chính
+           là thứ hệ thống làm bên trong, vẽ ra cho thấy. -->
+      <div class="art-wrap">
+        <svg class="art" viewBox="0 0 520 430" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img" aria-label="Đồ thị tri thức nối các doanh nghiệp">
+          <defs>
+            <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+              <circle cx="1.6" cy="1.6" r="1.6" fill="#dbeafe"/>
+            </pattern>
+            <radialGradient id="hub"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#0284c7"/></radialGradient>
+          </defs>
+          <rect width="520" height="430" fill="url(#dots)" rx="16"/>
+
+          <!-- cạnh -->
+          <g fill="none" stroke-width="2.4" stroke-linecap="round">
+            <path id="e1" d="M100 320 L265 232" stroke="#34d399" class="edge"/>
+            <path id="e2" d="M265 232 L420 122" stroke="#a78bfa" class="edge edge-slow"/>
+            <path id="e3" d="M140 108 L265 232" stroke="#38bdf8" class="edge edge-fast"/>
+            <path id="e4" d="M265 232 L415 330" stroke="#a78bfa" class="edge"/>
+            <path id="e5" d="M140 108 Q285 58 420 122" stroke="#38bdf8" class="edge edge-slow"/>
+            <path id="e6" d="M100 320 L140 108" stroke="#34d399" class="edge edge-slow"/>
+          </g>
+
+          <!-- gói dữ liệu chạy dọc cạnh -->
+          <g>
+            <circle r="5" fill="#10b981"><animateMotion dur="3.4s" repeatCount="indefinite"><mpath href="#e1" xlink:href="#e1"/></animateMotion></circle>
+            <circle r="5" fill="#8b5cf6"><animateMotion dur="4.2s" begin="-1.2s" repeatCount="indefinite"><mpath href="#e2" xlink:href="#e2"/></animateMotion></circle>
+            <circle r="4.5" fill="#0ea5e9"><animateMotion dur="3s" begin="-.6s" repeatCount="indefinite"><mpath href="#e3" xlink:href="#e3"/></animateMotion></circle>
+            <circle r="4.5" fill="#8b5cf6"><animateMotion dur="3.8s" begin="-2s" repeatCount="indefinite"><mpath href="#e4" xlink:href="#e4"/></animateMotion></circle>
+            <circle r="4" fill="#38bdf8"><animateMotion dur="5s" begin="-2.6s" repeatCount="indefinite"><mpath href="#e5" xlink:href="#e5"/></animateMotion></circle>
+          </g>
+
+          <!-- node -->
+          <g class="nodes" font-family="Inter,Segoe UI,system-ui,sans-serif" text-anchor="middle">
+            <circle cx="265" cy="232" r="46" fill="#0ea5e9" opacity=".14" class="halo"/>
+            <circle cx="265" cy="232" r="33" fill="url(#hub)"/>
+            <text x="265" y="237" fill="#fff" font-size="14" font-weight="700">NVIDIA</text>
+
+            <circle cx="140" cy="108" r="34" fill="#38bdf8" opacity=".13" class="halo halo-2"/>
+            <circle cx="140" cy="108" r="24" fill="#fff" stroke="#38bdf8" stroke-width="2.5"/>
+            <text x="140" y="113" fill="#0369a1" font-size="11.5" font-weight="700">Apple</text>
+
+            <circle cx="420" cy="122" r="35" fill="#8b5cf6" opacity=".13" class="halo halo-3"/>
+            <circle cx="420" cy="122" r="25" fill="#fff" stroke="#8b5cf6" stroke-width="2.5"/>
+            <text x="420" y="120" fill="#6d28d9" font-size="10" font-weight="700">Micro-</text>
+            <text x="420" y="131" fill="#6d28d9" font-size="10" font-weight="700">soft</text>
+
+            <circle cx="100" cy="320" r="34" fill="#10b981" opacity=".14" class="halo halo-2"/>
+            <circle cx="100" cy="320" r="24" fill="#fff" stroke="#10b981" stroke-width="2.5"/>
+            <text x="100" y="325" fill="#047857" font-size="11.5" font-weight="700">TSMC</text>
+
+            <circle cx="415" cy="330" r="32" fill="#a78bfa" opacity=".13" class="halo halo-3"/>
+            <circle cx="415" cy="330" r="22" fill="#fff" stroke="#a78bfa" stroke-width="2.5"/>
+            <text x="415" y="335" fill="#6d28d9" font-size="11.5" font-weight="700">AMD</text>
+          </g>
+
+          <!-- nhãn quan hệ -->
+          <g font-family="ui-monospace,Consolas,monospace" font-size="10.5" text-anchor="middle">
+            <rect x="140" y="266" width="70" height="19" rx="9" fill="#fff" stroke="#bbf7e0"/>
+            <text x="175" y="279" fill="#047857">cung cấp</text>
+            <rect x="311" y="160" width="80" height="19" rx="9" fill="#fff" stroke="#ddd6fe"/>
+            <text x="351" y="173" fill="#6d28d9">cạnh tranh</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-num" data-stat="companies">6.255</div><div class="stat-label">doanh nghiệp</div></div>
+      <div class="stat"><div class="stat-num" data-stat="financial_years">48.025</div><div class="stat-label">bản ghi năm tài chính</div></div>
+      <div class="stat"><div class="stat-num" data-stat="text_chunks">22.389</div><div class="stat-label">đoạn văn đã lập chỉ mục</div></div>
+      <div class="stat"><div class="stat-num" data-stat="knowledge_edges">1.939</div><div class="stat-label">quan hệ trong đồ thị</div></div>
+      <div class="stat stat-hl"><div class="stat-num">100%</div><div class="stat-label">chính xác số liệu (26/26)</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════ agent biết gì -->
+<section class="section sky" id="knows">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Tri thức của agent</p>
+      <h2>Ba tầng dữ liệu, ba mức chi phí</h2>
+      <p>Chi phí xây ba loại tri thức chênh nhau <strong>hàng nghìn lần</strong>. Không thể phủ cả ba ở cùng quy mô — và cũng không nên.</p>
+    </div>
+
+    <!-- BA LÀN DỮ LIỆU ĐANG CHẢY.
+         Mật độ chấm trong mỗi làn tỉ lệ với độ phủ thật: tầng số liệu dày đặc, tầng đồ
+         thị thưa thớt. Hình này nói được điều mà một bảng số không nói được. -->
+    <div class="art-wrap" style="margin-bottom:26px">
+      <svg class="art" viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img" aria-label="Ba làn dữ liệu với mật độ khác nhau">
+        <g font-family="Inter,Segoe UI,system-ui,sans-serif">
+          <!-- làn 1 -->
+          <rect x="10" y="18" width="880" height="58" rx="16" fill="#ecfdf5" stroke="#a7f3d0"/>
+          <path id="L1" d="M118 47 H470" fill="none"/>
+          <text x="34" y="52" font-size="13" font-weight="700" fill="#047857">SỐ LIỆU</text>
+          <text x="860" y="52" font-size="12.5" fill="#047857" text-anchor="end" font-family="ui-monospace,Consolas,monospace">6.255 doanh nghiệp · 0 lần gọi LLM</text>
+
+          <!-- làn 2 -->
+          <rect x="10" y="96" width="880" height="58" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
+          <path id="L2" d="M118 125 H470" fill="none"/>
+          <text x="34" y="130" font-size="13" font-weight="700" fill="#0369a1">VĂN BẢN</text>
+          <text x="860" y="130" font-size="12.5" fill="#0369a1" text-anchor="end" font-family="ui-monospace,Consolas,monospace">22.389 đoạn · nhúng vector trên CPU</text>
+
+          <!-- làn 3 -->
+          <rect x="10" y="174" width="880" height="58" rx="16" fill="#f5f3ff" stroke="#ddd6fe"/>
+          <path id="L3" d="M118 203 H470" fill="none"/>
+          <text x="34" y="208" font-size="13" font-weight="700" fill="#6d28d9">ĐỒ THỊ</text>
+          <text x="860" y="208" font-size="12.5" fill="#6d28d9" text-anchor="end" font-family="ui-monospace,Consolas,monospace">84 doanh nghiệp · 1 lần gọi LLM mỗi đoạn</text>
+        </g>
+
+        <!-- chấm chảy: làn 1 dày, làn 2 vừa, làn 3 thưa -->
+        <g id="flowdots">
+          <circle r="5" fill="#10b981"><animateMotion dur="3.2s" repeatCount="indefinite"><mpath href="#L1" xlink:href="#L1"/></animateMotion></circle>
+          <circle r="5" fill="#10b981"><animateMotion dur="3.2s" begin="-.53s" repeatCount="indefinite"><mpath href="#L1" xlink:href="#L1"/></animateMotion></circle>
+          <circle r="5" fill="#10b981"><animateMotion dur="3.2s" begin="-1.07s" repeatCount="indefinite"><mpath href="#L1" xlink:href="#L1"/></animateMotion></circle>
+          <circle r="5" fill="#10b981"><animateMotion dur="3.2s" begin="-1.6s" repeatCount="indefinite"><mpath href="#L1" xlink:href="#L1"/></animateMotion></circle>
+          <circle r="5" fill="#10b981"><animateMotion dur="3.2s" begin="-2.13s" repeatCount="indefinite"><mpath href="#L1" xlink:href="#L1"/></animateMotion></circle>
+          <circle r="5" fill="#10b981"><animateMotion dur="3.2s" begin="-2.67s" repeatCount="indefinite"><mpath href="#L1" xlink:href="#L1"/></animateMotion></circle>
+
+          <circle r="5" fill="#0ea5e9"><animateMotion dur="4.4s" repeatCount="indefinite"><mpath href="#L2" xlink:href="#L2"/></animateMotion></circle>
+          <circle r="5" fill="#0ea5e9"><animateMotion dur="4.4s" begin="-1.47s" repeatCount="indefinite"><mpath href="#L2" xlink:href="#L2"/></animateMotion></circle>
+          <circle r="5" fill="#0ea5e9"><animateMotion dur="4.4s" begin="-2.93s" repeatCount="indefinite"><mpath href="#L2" xlink:href="#L2"/></animateMotion></circle>
+
+          <circle r="5" fill="#8b5cf6"><animateMotion dur="6.5s" repeatCount="indefinite"><mpath href="#L3" xlink:href="#L3"/></animateMotion></circle>
+        </g>
+      </svg>
+    </div>
+
+    <div class="tiers">
+      <div class="tier-row tier-head"><div>Tầng</div><div>Trả lời loại câu hỏi</div><div>Độ phủ hiện tại</div><div>Chi phí xây</div></div>
+      <div class="tier-row">
+        <div><span class="tag tag-num">Số liệu</span></div>
+        <div>Con số chính xác, so sánh, sàng lọc toàn thị trường</div>
+        <div class="mono"><strong data-stat="companies">6.255</strong> doanh nghiệp</div>
+        <div>1 file 1,41 GB · 11 giây · <strong>0 lần gọi LLM</strong></div>
+      </div>
+      <div class="tier-row">
+        <div><span class="tag tag-text">Văn bản</span></div>
+        <div>Chiến lược, rủi ro, ban lãnh đạo nói gì</div>
+        <div class="mono"><strong data-stat="text_chunks">22.389</strong> đoạn văn</div>
+        <div>vài giờ nhúng vector trên CPU</div>
+      </div>
+      <div class="tier-row">
+        <div><span class="tag tag-graph">Đồ thị</span></div>
+        <div>Quan hệ bắc cầu qua nhiều bước</div>
+        <div class="mono"><strong data-stat="tier_graph">84</strong> doanh nghiệp</div>
+        <div>1 lần gọi LLM cho <em>mỗi</em> đoạn văn</div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note">
+        <h4>Vì sao đồ thị không phủ hết 6.255 công ty</h4>
+        <p>Phủ hết sẽ mất <strong>khoảng 50 ngày GPU chạy liên tục</strong>. Nhưng lý do sâu hơn nằm ở
+          bản chất đồ thị: sức mạnh của nó ở <em>cạnh nối</em>, không phải số điểm.</p>
+        <p>6.000 công ty ngẫu nhiên gần như không nhắc tên nhau — đồ thị sẽ rời rạc, nhiều điểm
+          mà không đường đi nào để suy luận. 50 công ty cùng chuỗi cung ứng thì nhắc tên nhau liên tục.</p>
+      </div>
+      <div class="note">
+        <h4>Bộ lọc đoạn văn — tối ưu lớn nhất của dự án</h4>
+        <p>Nguyên tắc: <em>một đoạn không nêu tên tổ chức nào thì không thể sinh ra quan hệ giữa
+          hai công ty — không có công ty thứ hai để nối.</em></p>
+        <table class="mini-table">
+          <tr><th></th><th>Chạy dàn trải</th><th>Sau khi lọc</th></tr>
+          <tr><td>Đoạn phải chạy LLM</td><td>4.748</td><td><strong>823</strong></td></tr>
+          <tr><td>Thời gian</td><td>~6 giờ</td><td><strong>~1,1 giờ</strong></td></tr>
+          <tr><td>Cạnh nối hai công ty</td><td>3,6%</td><td><strong>31%</strong></td></tr>
+        </table>
+        <p class="tiny">Nhanh hơn 5,5 lần <em>và</em> đồ thị dày hơn ở đúng chỗ cần — không phải đánh
+          đổi, mà vì trước đó phần lớn thời gian GPU tiêu vào những đoạn không có gì để trích.</p>
+      </div>
+      <div class="note">
+        <h4>Nạp theo yêu cầu — ranh giới của “agent thật”</h4>
+        <p>Hỏi về một doanh nghiệp chưa có trong chỉ mục văn bản, hệ thống <strong>tự đi lấy ngay
+          trong lúc trả lời</strong>: tải báo cáo 10-K từ SEC, bóc tách, nhúng vector, rồi mới trả lời.
+          Đo thật: <strong>36–45 giây</strong>.</p>
+        <p>Agent nhận ra mình thiếu thông tin và tự hành động để bù đắp, thay vì trả lời
+          “tôi không biết”. Nhờ vậy độ phủ thực tế là <strong>toàn bộ 8.001 doanh nghiệp</strong>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════ hỏi được gì -->
+<section class="section" id="ask">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Năng lực</p>
+      <h2>Ba câu hỏi, ba loại tri thức</h2>
+      <p>Chatbot thường trả lời được câu đầu bằng cách bịa. Câu thứ ba thì gần như không hệ nào trả lời nổi.</p>
+    </div>
+
+    <div class="cards">
+      <article class="card">
+        <div><span class="tag tag-num">Số liệu</span></div>
+        <h3>“Doanh thu NVIDIA năm 2026 là bao nhiêu?”</h3>
+        <p>Trả lời bằng cách <strong>tra từ điển</strong> trên dữ liệu XBRL đã nộp cho SEC. Con số
+          không đi qua mô hình ngôn ngữ ở bất kỳ khâu nào — nó chỉ được trình bày lại.</p>
+        <p>Khi AI đọc một bảng biểu đã bị làm phẳng thành văn bản, nó rất dễ lấy nhầm cột hoặc
+          nhầm đơn vị — và <strong>không báo lỗi gì cả</strong>.</p>
+        <div class="card-foot">Nguồn: hồ sơ XBRL · <span data-stat="companies">6.255</span> doanh nghiệp</div>
+      </article>
+
+      <article class="card">
+        <div><span class="tag tag-text">Văn bản</span></div>
+        <h3>“NVIDIA lo ngại gì về lệnh cấm xuất khẩu chip?”</h3>
+        <p>Tìm bằng <strong>ý nghĩa</strong> chứ không bằng từ khóa: mỗi đoạn văn được biến thành một
+          dãy 384 con số, sao cho hai đoạn cùng nghĩa thì hai dãy nằm gần nhau.</p>
+        <p>Nhờ vậy bạn gõ “rủi ro chuỗi cung ứng” vẫn tìm ra đoạn viết
+          <em>“dependence on single-source suppliers”</em>.</p>
+        <div class="card-foot">Nguồn: mục 1A báo cáo 10-K · <span data-stat="text_chunks">22.389</span> đoạn</div>
+      </article>
+
+      <article class="card">
+        <div><span class="tag tag-graph">Đồ thị</span></div>
+        <h3>“TSMC gián đoạn thì Microsoft ảnh hưởng qua đường nào?”</h3>
+        <p>Không đoạn văn nào nhắc đồng thời hai cái tên này — mối liên hệ đi qua một công ty ở
+          giữa. Chỉ <strong>đồ thị tri thức</strong> mới đi được nhiều bước liên tiếp.</p>
+        <svg class="art" viewBox="0 0 380 74" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" style="margin:6px 0 4px" role="img" aria-label="Chuỗi TSMC đến NVIDIA đến Microsoft">
+          <path id="c1" d="M62 37 H150" fill="none" stroke="#a7f3d0" stroke-width="2.5" class="edge"/>
+          <path id="c2" d="M228 37 H300" fill="none" stroke="#ddd6fe" stroke-width="2.5" class="edge"/>
+          <circle r="4.5" fill="#10b981"><animateMotion dur="2.6s" repeatCount="indefinite"><mpath href="#c1" xlink:href="#c1"/></animateMotion></circle>
+          <circle r="4.5" fill="#8b5cf6"><animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite"><mpath href="#c2" xlink:href="#c2"/></animateMotion></circle>
+          <g font-family="ui-monospace,Consolas,monospace" font-size="12" text-anchor="middle">
+            <rect x="2" y="22" width="60" height="30" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/><text x="32" y="42" fill="#047857">TSMC</text>
+            <rect x="150" y="22" width="78" height="30" rx="10" fill="#eff6ff" stroke="#bfdbfe"/><text x="189" y="42" fill="#0369a1">NVIDIA</text>
+            <rect x="300" y="22" width="78" height="30" rx="10" fill="#f5f3ff" stroke="#ddd6fe"/><text x="339" y="42" fill="#6d28d9">Microsoft</text>
+            <text x="106" y="16" fill="#047857" font-size="10">cung cấp</text>
+            <text x="264" y="16" fill="#6d28d9" font-size="10">cạnh tranh</text>
+          </g>
+        </svg>
+        <div class="card-foot">Nguồn: <span data-stat="knowledge_edges">1.939</span> quan hệ · <span data-stat="relation_types">14</span> loại</div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════ cách hoạt động -->
+<section class="section mint" id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Bên trong</p>
+      <h2>Bốn khối, và một vòng lặp</h2>
+      <p>Chatbot thường: bạn hỏi → nó trả lời. Agent: nó <strong>quyết định cần công cụ nào</strong>,
+         gọi công cụ, <strong>xem kết quả đã đủ chưa</strong>, rồi mới trả lời.</p>
+    </div>
+
+    <!-- ĐƯỜNG ỐNG XỬ LÝ ĐANG CHẠY.
+         Gói dữ liệu đi lần lượt qua bốn khối, rồi một gói tím quay ngược từ khối "suy
+         xét" về khối "thực thi" — chính là vòng lặp làm nên agent. -->
+    <div class="art-wrap">
+      <svg class="art" viewBox="0 0 920 300" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img" aria-label="Đường ống bốn khối của agent">
+        <g font-family="Inter,Segoe UI,system-ui,sans-serif" text-anchor="middle">
+          <!-- khối -->
+          <rect x="14" y="46" width="196" height="104" rx="18" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+          <circle cx="46" cy="76" r="13" fill="#0ea5e9"/><text x="46" y="81" fill="#fff" font-size="13" font-weight="700">1</text>
+          <text x="112" y="112" fill="#0a2540" font-size="16" font-weight="700">Định tuyến</text>
+          <text x="112" y="133" fill="#6889a5" font-size="12">chọn công cụ cần gọi</text>
+
+          <rect x="248" y="46" width="196" height="104" rx="18" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="1.5"/>
+          <circle cx="280" cy="76" r="13" fill="#10b981"/><text x="280" y="81" fill="#fff" font-size="13" font-weight="700">2</text>
+          <text x="346" y="112" fill="#0a2540" font-size="16" font-weight="700">Thực thi</text>
+          <text x="346" y="133" fill="#047857" font-size="12" font-weight="600">KHÔNG có LLM ở đây</text>
+
+          <rect x="482" y="46" width="196" height="104" rx="18" fill="#f5f3ff" stroke="#ddd6fe" stroke-width="1.5"/>
+          <circle cx="514" cy="76" r="13" fill="#8b5cf6"/><text x="514" y="81" fill="#fff" font-size="13" font-weight="700">3</text>
+          <text x="580" y="112" fill="#0a2540" font-size="16" font-weight="700">Suy xét</text>
+          <text x="580" y="133" fill="#6889a5" font-size="12">đủ dữ liệu chưa?</text>
+
+          <rect x="716" y="46" width="190" height="104" rx="18" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
+          <circle cx="748" cy="76" r="13" fill="#f59e0b"/><text x="748" y="81" fill="#fff" font-size="13" font-weight="700">4</text>
+          <text x="811" y="112" fill="#0a2540" font-size="16" font-weight="700">Trả lời</text>
+          <text x="811" y="133" fill="#6889a5" font-size="12">bắt buộc dẫn nguồn</text>
+        </g>
+
+        <!-- nối tiến -->
+        <g fill="none" stroke-width="2.5" stroke-linecap="round">
+          <path id="p1" d="M210 98 H248" stroke="#93c5fd" class="edge edge-fast"/>
+          <path id="p2" d="M444 98 H482" stroke="#6ee7b7" class="edge edge-fast"/>
+          <path id="p3" d="M678 98 H716" stroke="#c4b5fd" class="edge edge-fast"/>
+          <!-- vòng quay ngược, đi vòng xuống dưới -->
+          <path id="pb" d="M580 150 V222 Q580 246 556 246 H370 Q346 246 346 222 V150"
+                stroke="#8b5cf6" stroke-width="2.5" stroke-dasharray="7 7" class="edge edge-slow"/>
+        </g>
+
+        <!-- gói dữ liệu, đi lần lượt để đọc ra thứ tự -->
+        <circle r="6" fill="#0ea5e9">
+          <animateMotion dur="4.5s" repeatCount="indefinite" calcMode="linear"
+            keyTimes="0;0.18;1" keyPoints="0;1;1"><mpath href="#p1" xlink:href="#p1"/></animateMotion>
+        </circle>
+        <circle r="6" fill="#10b981">
+          <animateMotion dur="4.5s" repeatCount="indefinite" calcMode="linear"
+            keyTimes="0;0.30;0.48;1" keyPoints="0;0;1;1"><mpath href="#p2" xlink:href="#p2"/></animateMotion>
+        </circle>
+        <circle r="6" fill="#f59e0b">
+          <animateMotion dur="4.5s" repeatCount="indefinite" calcMode="linear"
+            keyTimes="0;0.80;0.94;1" keyPoints="0;0;1;1"><mpath href="#p3" xlink:href="#p3"/></animateMotion>
+        </circle>
+        <circle r="6" fill="#8b5cf6">
+          <animateMotion dur="4.5s" repeatCount="indefinite" calcMode="linear"
+            keyTimes="0;0.50;0.78;1" keyPoints="0;0;1;1"><mpath href="#pb" xlink:href="#pb"/></animateMotion>
+        </circle>
+
+        <g font-family="Inter,Segoe UI,system-ui,sans-serif" text-anchor="middle">
+          <rect x="398" y="234" width="130" height="24" rx="12" fill="#fff" stroke="#ddd6fe"/>
+          <text x="463" y="250" fill="#6d28d9" font-size="12" font-weight="650">thiếu → lấy thêm</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="notes">
+      <div class="note">
+        <h4>Mũi tên quay ngược là thứ làm nên agent</h4>
+        <p>Nó cho phép hệ thống nhận ra mình thiếu dữ liệu và tự đi lấy thêm, thay vì trả lời bừa
+          bằng những gì có sẵn.</p>
+        <p>Tối đa <strong>3 vòng</strong> — model chạy local mà thả tự do sẽ lặp vô hạn khi gặp câu
+          hỏi nó không giải được, và người dùng ngồi chờ mãi không có gì.</p>
+      </div>
+      <div class="note">
+        <h4>Mô hình ngôn ngữ không được viết truy vấn</h4>
+        <p>Cách phổ biến là đưa lược đồ đồ thị cho AI rồi bảo nó sinh câu truy vấn Cypher. Với model
+          nhỏ chạy local, cách đó hỏng theo ba đường: sai cú pháp, <strong>sai ngữ nghĩa mà không có
+          dấu hiệu gì</strong>, hoặc bị dụ sinh ra lệnh xóa dữ liệu.</p>
+        <p>Ở đây mọi truy vấn được viết sẵn và tham số hóa. Mô hình chỉ chọn công cụ và điền tham số
+          có kiểu rõ ràng.</p>
+      </div>
+      <div class="note">
+        <h4>Mỗi quan hệ đều kèm câu văn gốc</h4>
+        <p>Mỗi cạnh trong đồ thị lưu kèm đúng câu trong báo cáo đã sinh ra nó, và câu đó phải xuất
+          hiện <strong>nguyên văn</strong> trong đoạn gốc thì mới được nhận.</p>
+        <p>Nhờ vậy mọi khẳng định đều truy vết ngược được tới tận số hiệu bản khai trên SEC.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════ vì sao tin được -->
+<section class="section" id="trust">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Kiểm chứng</p>
+      <h2>Vì sao tin được kết quả</h2>
+      <p>Thước đo chính <strong>không dùng mô hình ngôn ngữ làm giám khảo</strong> — vì giám khảo
+         sẽ là chính mô hình đang cần đánh giá.</p>
+    </div>
+
+    <div class="eval-grid">
+      <div class="eval-card eval-main">
+        <div class="eval-num">26<span>/26</span></div>
+        <div class="eval-label">độ chính xác số liệu</div>
+        <p>Câu hỏi được <strong>sinh tự động từ chính dữ liệu XBRL</strong>, nên đáp án chuẩn là con
+          số chính xác. Chấm bằng cách dò số trong câu trả lời: xác định, lặp lại được, không ai cãi được.</p>
+      </div>
+      <div class="eval-card">
+        <div class="eval-num">18<span>s</span></div>
+        <div class="eval-label">thời gian trung vị mỗi câu</div>
+        <p>Giảm từ 87–275 giây. Cải thiện đến từ việc tắt chuỗi suy nghĩ ở khối định tuyến và khối
+          trả lời — đo thật, độ chính xác không đổi.</p>
+      </div>
+      <div class="eval-card">
+        <div class="eval-num">7</div>
+        <div class="eval-label">bẫy dữ liệu SEC đã ghi lại</div>
+        <p>Đều là <strong>lỗi âm thầm</strong>: không báo lỗi, chỉ lặng lẽ cho kết quả sai. Ví dụ trường
+          <code>fy</code> trong XBRL là năm của <em>bản khai</em>, không phải năm của số liệu.</p>
+      </div>
+    </div>
+
+    <div class="limits">
+      <h4>Giới hạn — nói thẳng</h4>
+      <ul>
+        <li><b>Không có doanh nghiệp Việt Nam</b> (trừ VinFast, vì họ niêm yết ở Mỹ). Đây là giới hạn của nguồn dữ liệu, không phải của mã nguồn.</li>
+        <li><b>Không quy đổi tỷ giá.</b> Toyota báo cáo bằng yên, TSMC bằng Đài tệ. Hệ thống ghi rõ đồng tiền và <em>từ chối</em> so sánh trực tiếp thay vì đoán bừa.</li>
+        <li><b>Đồ thị chỉ phủ <span data-stat="tier_graph">84</span> doanh nghiệp</b> — câu hỏi bắc cầu ngoài cụm bán dẫn/đám mây sẽ không có đường đi.</li>
+        <li><b>Chậm hơn dịch vụ đám mây.</b> 18–78 giây mỗi câu, vì mô hình chạy trên GPU 16 GB tại chỗ chứ không phải trên trung tâm dữ liệu.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════ công nghệ -->
+<section class="section sky">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Công nghệ</p>
+      <h2>Những gì chạy bên dưới</h2>
+      <p>Toàn bộ chạy trên máy cá nhân. Không gọi API trả phí, không gửi dữ liệu ra ngoài.</p>
+    </div>
+    <div class="stack">
+      <div class="tech"><b>Neo4j</b><span>cơ sở dữ liệu đồ thị — lưu quan hệ, đi được nhiều bước liên tiếp</span></div>
+      <div class="tech"><b>Qdrant</b><span>cơ sở dữ liệu vector — tìm theo ý nghĩa, không theo từ khóa</span></div>
+      <div class="tech"><b>LangGraph</b><span>máy trạng thái điều phối bốn khối và vòng lặp suy xét</span></div>
+      <div class="tech"><b>LM Studio</b><span>mô hình ngôn ngữ chạy ngay trên máy, dữ liệu không rời khỏi máy</span></div>
+      <div class="tech"><b>fastembed</b><span>nhúng vector trên CPU, cố ý chừa toàn bộ VRAM cho mô hình</span></div>
+      <div class="tech"><b>FastAPI</b><span>API và luồng sự kiện thời gian thực cho giao diện này</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════ kêu gọi -->
+<section class="section">
+  <div class="wrap">
+    <div class="cta">
+      <svg class="cta-art" viewBox="0 0 1200 340" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true">
+        <path id="w1" d="M-40 250 Q200 170 440 240 T940 210 T1260 260" fill="none" stroke="rgba(255,255,255,.42)" stroke-width="2" class="edge edge-slow"/>
+        <path id="w2" d="M-40 300 Q260 230 520 296 T1000 268 T1260 310" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="2" class="edge"/>
+        <circle r="6" fill="#fff"><animateMotion dur="9s" repeatCount="indefinite"><mpath href="#w1" xlink:href="#w1"/></animateMotion></circle>
+        <circle r="5" fill="#fff" opacity=".8"><animateMotion dur="11s" begin="-4s" repeatCount="indefinite"><mpath href="#w2" xlink:href="#w2"/></animateMotion></circle>
+        <circle r="4" fill="#fff" opacity=".65"><animateMotion dur="9s" begin="-5.5s" repeatCount="indefinite"><mpath href="#w1" xlink:href="#w1"/></animateMotion></circle>
+      </svg>
+      <div class="cta-inner">
+        <h2>Thử hỏi một câu xem sao</h2>
+        <p>Không cần đăng ký. Có sẵn câu hỏi mẫu cho cả ba loại tri thức — bạn chỉ cần bấm.</p>
+        <a class="btn btn-lg" href="/chat">
+          Mở trang trò chuyện
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div>
+      <div class="brand"><svg class="brand-mark"><use href="#logo"/></svg><span>FinGraph</span></div>
+      <p class="tiny">Agentic GraphRAG cho phân tích doanh nghiệp &amp; đầu tư · dữ liệu công khai từ SEC EDGAR</p>
+    </div>
+    <div class="footer-meta">
+      <span class="tiny mono" id="modelName"></span>
+      <a class="tiny" href="/docs">Tài liệu API</a>
+    </div>
+  </div>
+</footer>
+
+<script src="/static/home.js"></script>
+</body>
+</html>

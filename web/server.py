@@ -1,0 +1,382 @@
+"""Máy chủ web cho trợ lý phân tích — thay thế Streamlit.
+
+VÌ SAO BỎ STREAMLIT
+
+Streamlit chạy lại TOÀN BỘ file mỗi lần người dùng chạm vào bất cứ thứ gì. Với dự án này
+có ba hệ quả thực tế:
+
+  1. Không stream được. `ask()` mất 18-78 giây, và Streamlit chỉ vẽ được sau khi hàm trả
+     về. Người dùng ngồi nhìn màn hình trắng — đúng thứ khiến demo trông như bị treo.
+  2. Không nhúng được vào trang giới thiệu. Streamlit chiếm trọn cửa sổ, không có chỗ
+     cho phần PR/quảng bá.
+  3. Deploy khó. Nó cần WebSocket riêng, phiên bám vào tiến trình, và không đặt sau
+     CDN/reverse-proxy thông thường được.
+
+Kiến trúc thay thế: FastAPI phục vụ (a) một trang tĩnh và (b) một API JSON. Trang tĩnh
+đẩy lên CDN nào cũng được; API là HTTP thuần. Câu trả lời đi về qua SSE (Server-Sent
+Events) nên người dùng THẤY agent đang làm gì ngay khi nó làm.
+
+SSE LÀ GÌ
+
+Một kết nối HTTP mà máy chủ giữ mở và đẩy dần từng dòng `data: {...}` xuống. Đơn giản
+hơn WebSocket nhiều (một chiều là đủ cho ta), và đi qua mọi proxy vì bản chất nó vẫn
+chỉ là một response HTTP dài.
+
+Chạy:
+    .venv/Scripts/python.exe -m uvicorn web.server:app --host 0.0.0.0 --port 8000
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, Iterator
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+# Import này PHẢI đứng trước mọi thứ in ra console: nó chỉnh stdout sang UTF-8, nếu
+# không thì mọi log tiếng Việt sẽ làm sập tiến trình trên Windows.
+from config.settings import settings
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+app = FastAPI(
+    title="Agentic GraphRAG — Phân tích Doanh nghiệp & Đầu tư",
+    description="API cho trợ lý phân tích trên dữ liệu SEC EDGAR.",
+    version="1.0.0",
+)
+
+# Cho phép nhúng khung demo từ tên miền khác (trang giới thiệu tách rời máy chủ API).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+
+# ------------------------------------------------------------------ nạp chậm
+
+# Nạp Neo4j/Qdrant/LangGraph mất vài giây và cần Docker đang chạy. Nếu nạp lúc import thì
+# máy chủ không khởi động nổi khi Docker chưa lên — trang giới thiệu chết theo, dù nó
+# chẳng cần cơ sở dữ liệu nào. Nạp chậm để trang tĩnh luôn phục vụ được.
+
+_backend_lock = threading.Lock()
+_backend: Dict[str, Any] = {}
+
+
+def backend() -> Dict[str, Any]:
+    with _backend_lock:
+        if not _backend:
+            from src.agent import tools
+            from src.agent.graph_agent import build_agent
+
+            _backend["agent"] = build_agent()
+            _backend["tools"] = tools
+            _backend["graph"] = tools.graph()
+            _backend["vectors"] = tools.vectors()
+        return _backend
+
+
+# Model local phục vụ tuần tự: hai câu hỏi cùng lúc không chạy nhanh gấp đôi, chúng tranh
+# nhau KV cache và làm chậm cả hai. Xếp hàng tường minh, và báo cho người dùng biết họ
+# đứng thứ mấy thay vì để họ nhìn màn hình đứng im.
+_llm_gate = threading.Semaphore(1)
+_waiting = threading.Lock()
+_queue_depth = {"n": 0}
+
+
+# ------------------------------------------------------------------ thống kê
+
+_stats_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def collect_stats() -> Dict[str, Any]:
+    """Số liệu độ phủ cho trang chủ. Cache 60 giây — đây là truy vấn đếm toàn đồ thị."""
+    if _stats_cache["data"] and time.time() - _stats_cache["at"] < 60:
+        return _stats_cache["data"]
+
+    store = backend()["graph"]
+    raw = store.stats()
+    nodes = {r["label"]: r["n"] for r in raw["nodes"]}
+    rels = {r["type"]: r["n"] for r in raw["relationships"]}
+    tiers = {
+        r["tier"]: r["n"]
+        for r in store.run(
+            "MATCH (c:Company) RETURN coalesce(c.tier,'metrics') AS tier, count(*) AS n"
+        )
+    }
+
+    # HAS_FINANCIALS và FILED là cạnh hạ tầng (nối công ty với bản ghi năm / hồ sơ), không
+    # phải tri thức trích xuất được. Gộp chúng vào sẽ thổi phồng con số lên hàng chục lần.
+    infra = ("HAS_FINANCIALS", "FILED")
+    knowledge_edges = sum(n for t, n in rels.items() if t not in infra)
+
+    data = {
+        "companies": nodes.get("Company", 0),
+        "financial_years": nodes.get("FinancialYear", 0),
+        "text_chunks": backend()["vectors"].count(),
+        "knowledge_edges": knowledge_edges,
+        "relation_types": len([t for t in rels if t not in infra]),
+        "tiers": {
+            "metrics": tiers.get("metrics", 0),
+            "text": tiers.get("text", 0),
+            "graph": tiers.get("graph", 0),
+        },
+        "model": settings.llm_reasoning_model,
+    }
+    _stats_cache.update({"at": time.time(), "data": data})
+    return data
+
+
+# ------------------------------------------------------------------ điểm cuối
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+
+
+@app.get("/api/health")
+def health() -> Dict[str, Any]:
+    """Kiểm tra ba phụ thuộc RIÊNG BIỆT để báo đúng cái nào hỏng.
+
+    Gộp thành một cờ ok/không-ok là vô dụng khi gỡ lỗi: người dùng cần biết phải đi bật
+    Docker hay đi bật LM Studio.
+    """
+    status: Dict[str, Any] = {"neo4j": False, "qdrant": False, "llm": False, "detail": {}}
+
+    try:
+        backend()["graph"].run("RETURN 1 AS ok")
+        status["neo4j"] = True
+    except Exception as exc:  # noqa: BLE001
+        status["detail"]["neo4j"] = str(exc)[:200]
+
+    try:
+        backend()["vectors"].count()
+        status["qdrant"] = True
+    except Exception as exc:  # noqa: BLE001
+        status["detail"]["qdrant"] = str(exc)[:200]
+
+    try:
+        import httpx
+
+        resp = httpx.get(f"{settings.llm_base_url}/models", timeout=5)
+        status["llm"] = resp.status_code == 200
+        if not status["llm"]:
+            status["detail"]["llm"] = f"HTTP {resp.status_code}"
+    except Exception as exc:  # noqa: BLE001
+        status["detail"]["llm"] = str(exc)[:200]
+
+    status["ready"] = all((status["neo4j"], status["qdrant"], status["llm"]))
+    return status
+
+
+@app.get("/api/stats")
+def stats() -> Dict[str, Any]:
+    try:
+        return collect_stats()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, f"Không kết nối được cơ sở dữ liệu: {str(exc)[:200]}")
+
+
+@app.get("/api/coverage")
+def coverage(q: str) -> Dict[str, Any]:
+    """Tra xem hệ thống đang có gì về một doanh nghiệp."""
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(400, "Cần ít nhất 2 ký tự")
+    try:
+        return backend()["tools"].company_coverage(q.strip())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc)[:200])
+
+
+# Nhãn tiếng Việt cho từng công cụ. Đặt ở máy chủ chứ không ở trình duyệt vì đây là mô tả
+# hành vi backend — thêm công cụ mới thì chỉ sửa một chỗ.
+TOOL_META = {
+    "lookup_financials": {"label": "Tra số liệu XBRL", "icon": "table", "source": "Neo4j · XBRL"},
+    "compare_financials": {"label": "So sánh doanh nghiệp", "icon": "scale", "source": "Neo4j · XBRL"},
+    "screen_companies": {"label": "Sàng lọc toàn thị trường", "icon": "filter", "source": "Neo4j · XBRL"},
+    "search_filings": {"label": "Tìm trong báo cáo 10-K", "icon": "search", "source": "Qdrant · vector"},
+    "graph_neighbors": {"label": "Duyệt đồ thị tri thức", "icon": "graph", "source": "Neo4j · đồ thị"},
+    "graph_path": {"label": "Tìm chuỗi liên kết", "icon": "path", "source": "Neo4j · đồ thị"},
+    "company_coverage": {"label": "Kiểm tra độ phủ", "icon": "info", "source": "Neo4j"},
+}
+
+STEP_META = {
+    "định tuyến": {"phase": "route", "label": "Định tuyến", "desc": "LLM chọn công cụ cần gọi"},
+    "thực thi": {"phase": "execute", "label": "Thực thi", "desc": "Chạy truy vấn — không có LLM ở bước này"},
+    "suy xét": {"phase": "reflect", "label": "Suy xét", "desc": "Dữ liệu thu được đã đủ chưa?"},
+    "trả lời": {"phase": "compose", "label": "Viết câu trả lời", "desc": "LLM tổng hợp, bắt buộc dẫn nguồn"},
+}
+
+
+def _enrich(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Gắn nhãn hiển thị vào một mục dấu vết thô."""
+    meta = STEP_META.get(entry.get("step", ""), {"phase": "other", "label": entry.get("step", "?"), "desc": ""})
+    out = {**entry, **meta}
+    tool = entry.get("tool")
+    if tool:
+        out["tool_meta"] = TOOL_META.get(tool, {"label": tool, "icon": "tool", "source": ""})
+    return out
+
+
+def _sse(event: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+
+
+def run_agent_stream(question: str) -> Iterator[str]:
+    """Chạy agent và đẩy từng bước xuống trình duyệt ngay khi bước đó xong.
+
+    LangGraph cho phép `.stream(stream_mode="updates")` — sau mỗi khối nó trả về phần
+    state vừa thay đổi. Các khối ở đây trả về `{**state, ...}` nên mỗi lần cập nhật mang
+    theo TOÀN BỘ dấu vết; ta chỉ phát ra phần đuôi chưa gửi.
+
+    Vì sao không viết async: các thư viện bên dưới (neo4j driver, openai client,
+    fastembed) đều đồng bộ. Bọc chúng trong `async def` mà không await gì sẽ chặn event
+    loop và làm đứng toàn bộ máy chủ, kể cả trang tĩnh. StreamingResponse của Starlette
+    tự chạy iterator đồng bộ trong threadpool, nên viết đồng bộ là đúng.
+    """
+    started = time.time()
+
+    with _waiting:
+        _queue_depth["n"] += 1
+        position = _queue_depth["n"]
+
+    if position > 1:
+        yield _sse({"type": "queued", "position": position - 1})
+
+    acquired = _llm_gate.acquire(timeout=600)
+    try:
+        if not acquired:
+            yield _sse({"type": "error", "message": "Máy chủ đang quá tải, thử lại sau."})
+            return
+
+        yield _sse({"type": "start", "question": question})
+
+        try:
+            agent = backend()["agent"]
+        except Exception as exc:  # noqa: BLE001
+            yield _sse({
+                "type": "error",
+                "message": f"Không khởi tạo được backend: {str(exc)[:200]}",
+                "hint": "Chạy `docker compose up -d` để bật Neo4j và Qdrant.",
+            })
+            return
+
+        sent = 0
+        final: Dict[str, Any] = {}
+
+        try:
+            for update in agent.stream(
+                {"question": question, "round": 0, "observations": [], "trace": []},
+                stream_mode="updates",
+            ):
+                for _node, delta in update.items():
+                    if not isinstance(delta, dict):
+                        continue
+                    final = delta
+                    trace = delta.get("trace") or []
+                    while sent < len(trace):
+                        yield _sse({"type": "step", "data": _enrich(trace[sent])})
+                        sent += 1
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)[:300]
+            low = message.lower()
+            hint = ""
+            if any(k in low for k in ("connect", "refused", "timeout", "10061")):
+                hint = ("Kiểm tra LM Studio đã bật server chưa (tab Developer → Start "
+                        "Server), và Docker đã chạy `docker compose up -d` chưa.")
+            yield _sse({"type": "error", "message": message, "hint": hint})
+            return
+
+        answer = final.get("answer") or ""
+        if not answer:
+            yield _sse({
+                "type": "error",
+                "message": "Agent không tạo được câu trả lời.",
+                "hint": "Thường do LLM trả về rỗng khi hết token. Thử hỏi ngắn gọn hơn.",
+            })
+            return
+
+        yield _sse({"type": "answer", "text": answer})
+        yield _sse({
+            "type": "done",
+            "seconds": round(time.time() - started, 1),
+            "rounds": final.get("round", 0),
+        })
+    finally:
+        if acquired:
+            _llm_gate.release()
+        with _waiting:
+            _queue_depth["n"] -= 1
+
+
+@app.post("/api/ask")
+def ask(req: AskRequest) -> StreamingResponse:
+    return StreamingResponse(
+        run_agent_stream(req.question.strip()),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Nginx mặc định gom buffer response, khiến SSE chỉ tới nơi khi đã xong hết —
+            # tức là mất sạch ý nghĩa của streaming. Header này tắt hành vi đó.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/ask-sync")
+def ask_sync(req: AskRequest) -> Dict[str, Any]:
+    """Bản không streaming — cho tích hợp máy-với-máy và cho script chấm điểm."""
+    from src.agent.graph_agent import ask as agent_ask
+
+    with _llm_gate:
+        try:
+            result = agent_ask(req.question.strip())
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(503, str(exc)[:300])
+    result["trace"] = [_enrich(t) for t in result.get("trace", [])]
+    return result
+
+
+# ------------------------------------------------------------------ trang tĩnh
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# Hai trang, hai việc rời nhau. Trang chủ giới thiệu hệ thống và tri thức nó đang có;
+# trang /chat chỉ để hỏi đáp, không có gì khác trên màn hình. Gộp cả hai vào một trang
+# khiến người mới vào phải đọc qua tài liệu mới tới được ô nhập, còn người quay lại lần
+# thứ hai thì phải cuộn qua phần họ đã đọc rồi.
+
+
+# Trang HTML KHÔNG được cache.
+#
+# Đã mất công tìm ra lỗi này: sau khi đổi trang chủ từ một-trang sang hai-trang, trình
+# duyệt vẫn hiện bản cũ vì nó giữ HTML trong cache và không hỏi lại máy chủ. Người dùng
+# thấy giao diện y hệt cũ và tưởng thay đổi chưa được áp dụng.
+#
+# File tĩnh (CSS/JS) cache được vì đổi tên là xong; còn HTML là điểm vào, nó phải luôn
+# mới. no-store mạnh hơn no-cache: không lưu bản nào, kể cả để đối chiếu.
+NO_CACHE = {"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"}
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html", headers=NO_CACHE)
+
+
+@app.get("/chat")
+def chat_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "chat.html", headers=NO_CACHE)
