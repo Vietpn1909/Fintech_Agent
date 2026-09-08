@@ -26,9 +26,21 @@ from typing import Any, Dict, List, Optional
 
 from src.graph.schema import RELATION_NAMES
 from src.graph.store import GraphStore
-from src.ingest.on_demand import ensure_text_available, is_text_indexed, resolve_ticker
+from src.ingest.on_demand import ensure_text_available, is_text_indexed, resolve_company
 from src.ingest.xbrl import METRIC_LABELS
 from src.vector.store import VectorStore
+
+# Câu nhắc gửi kèm mọi kết quả "không tìm thấy doanh nghiệp".
+#
+# Không chỉ để hiển thị: nó nói thẳng với khối suy xét rằng đây là kết luận DỨT ĐIỂM.
+# Thiếu nó, agent thấy công cụ trả về not_found sẽ tưởng mình chọn nhầm công cụ rồi thử
+# tiếp công cụ khác cho cùng cái tên — đo thật một lần lặp như vậy tốn 105 giây, mà kết
+# quả không thể khác được vì cái tên đó vốn không có trong dữ liệu SEC.
+_NOT_IN_SEC_HINT = (
+    "Doanh nghiệp này KHÔNG có trong dữ liệu SEC. Gọi thêm công cụ khác cho cùng cái "
+    "tên đó cũng vô ích — hãy trả lời ngay rằng hệ thống không có dữ liệu, và nêu các "
+    "gợi ý nếu có."
+)
 
 # Toán tử cho phép trong bộ lọc sàng lọc. Danh sách trắng, không nhận chuỗi tùy ý.
 _OPERATORS = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "eq": "="}
@@ -64,11 +76,18 @@ def lookup_financials(
     Đây là công cụ agent PHẢI dùng cho mọi câu hỏi về con số. Số trả về là số doanh
     nghiệp tự khai với SEC, kèm số hiệu bản khai để truy vết.
     """
-    candidates = resolve_ticker(company)
-    if not candidates:
-        return {"status": "not_found", "query": company}
+    # Dùng resolve_company chứ KHÔNG phải resolve_ticker[0].
+    #
+    # Lỗi cũ: hỏi "Acer" -> trả về doanh thu của MACERICH (bất động sản) với status ok.
+    # Nguyên nhân là lấy thẳng ứng viên đầu tiên mà không xét chất lượng khớp. Giờ khớp
+    # yếu sẽ ra not_found kèm gợi ý, thay vì một con số đúng gắn nhầm doanh nghiệp.
+    resolved = resolve_company(company)
+    if resolved["status"] != "ok":
+        return {"status": "not_found", "query": company,
+                "suggestions": [s["name"] for s in resolved.get("suggestions", [])],
+                "hint": _NOT_IN_SEC_HINT}
 
-    best = candidates[0]
+    best = resolved["best"]
     rows = graph().run(
         """
         MATCH (c:Company {ticker: $ticker})-[:HAS_FINANCIALS]->(fy:FinancialYear)
@@ -99,6 +118,9 @@ def lookup_financials(
         "status": "ok",
         "ticker": best["ticker"],
         "company": best["name"],
+        "matched_by": best.get("match"),
+        # Có nhiều doanh nghiệp cùng khớp mạnh -> nêu ra để agent nói rõ nó đã chọn ai.
+        "alternatives": [a["name"] for a in resolved.get("alternatives", [])[:3]],
         "source": "XBRL do doanh nghiệp khai báo với SEC",
         "years": records,
     }
@@ -119,10 +141,14 @@ def compare_financials(
     """
     resolved, name_map, unresolved = [], {}, []
     for name in companies:
-        cands = resolve_ticker(name)
-        if cands:
-            resolved.append(cands[0]["ticker"])
-            name_map[cands[0]["ticker"]] = cands[0]["name"]
+        # Khớp yếu bị coi như KHÔNG phân giải được. So sánh mà lẫn một doanh nghiệp sai
+        # vào bảng còn tệ hơn là thiếu nó: agent sẽ xếp hạng và kết luận trên số của
+        # công ty khác mà không ai phát hiện.
+        r = resolve_company(name)
+        if r["status"] == "ok":
+            best = r["best"]
+            resolved.append(best["ticker"])
+            name_map[best["ticker"]] = best["name"]
         else:
             unresolved.append(name)
 
@@ -290,13 +316,15 @@ def search_filings(
                 continue
         years = coerced_years or None
 
+    unresolved: List[str] = []
     if companies:
         tickers = []
         for name in companies:
-            cands = resolve_ticker(name)
-            if not cands:
+            r = resolve_company(name)
+            if r["status"] != "ok":
+                unresolved.append(name)
                 continue
-            ticker = cands[0]["ticker"]
+            ticker = r["best"]["ticker"]
             tickers.append(ticker)
             if auto_ingest and is_text_indexed(ticker, vectors()) == 0:
                 result = ensure_text_available(ticker)
@@ -304,6 +332,27 @@ def search_filings(
                     ingested.append(
                         {"ticker": ticker, "chunks": result["chunks"], "seconds": result["seconds"]}
                     )
+
+        # ⚠️ HỎI VỀ MỘT CÔNG TY, KHÔNG ĐƯỢC TRẢ VỀ VĂN BẢN CỦA CÔNG TY KHÁC.
+        #
+        # Bản cũ: tên nào không phân giải được thì bị bỏ qua lặng lẽ, `tickers` còn rỗng,
+        # và Qdrant tìm trên TOÀN BỘ kho không lọc gì. Đo thật khi hỏi về "Acer":
+        #     status: ok, 3 kết quả -> Sandisk, United Microelectronics, Teradyne
+        # Agent nhận `ok` kèm ba đoạn văn nên tưởng đã tìm thấy tài liệu về Acer, rồi
+        # tóm tắt nội dung của ba doanh nghiệp chẳng liên quan.
+        #
+        # Người dùng nêu tên công ty tức là họ muốn GIỚI HẠN trong công ty đó. Không
+        # giới hạn được thì phải báo, không được tự ý mở rộng ra cả kho.
+        if not tickers:
+            return {
+                "status": "company_not_found",
+                "query": query,
+                "unresolved_names": unresolved,
+                "hint": ("Không có doanh nghiệp nào trong số này nằm trong dữ liệu SEC. "
+                         "Đừng gọi lại công cụ khác cho cùng những cái tên đó — hãy trả "
+                         "lời rằng hệ thống không có dữ liệu về chúng."),
+                "results": [],
+            }
 
     hits = vectors().search(query, top_k=top_k, tickers=tickers, items=items, years=years)
 
@@ -362,17 +411,29 @@ def resolve_graph_entity(name: str, limit: int = 3) -> List[Dict]:
     # "TSMC" khớp trực tiếp vào "TSMC Arizona Corporation" (công ty con) và "AMD" khớp
     # vào "AMD Zynq SoC" (một sản phẩm) — cả hai đều là tiền tố hợp lệ nhưng sai thực
     # thể. Tên viết tắt đã biết thì phải dùng tên đầy đủ, không để phép khớp chuỗi đoán.
+    # Chỉ nhận node khớp CHẮC CHẮN. Node hạng `weak` là loại chỉ trùng chuỗi giữa chừng
+    # một từ khác ("AMD" nằm trong "Amdocs") — lấy nó làm điểm xuất phát thì mọi đường đi
+    # tìm được đều nói về sai doanh nghiệp, mà không có dấu hiệu nào báo lỗi.
+    def _strong(rows):
+        return [r for r in (rows or []) if r.get("confidence") != "weak"]
+
     alias = CANONICAL_COMPANIES.get((name or "").strip().lower())
     if alias:
-        via_alias = graph().find_entity(alias, limit=limit)
+        via_alias = _strong(graph().find_entity(alias, limit=limit))
         if via_alias:
             return via_alias
 
-    direct = graph().find_entity(name, limit=limit)
+    direct = _strong(graph().find_entity(name, limit=limit))
     if direct:
         return direct
 
-    for candidate in resolve_ticker(name, limit=2):
+    # Nhánh dự phòng cũng phải qua bộ lọc độ tin cậy, nếu không lỗi "Acer -> Macerich"
+    # sẽ quay lại bằng cửa sau: phân giải sai mã rồi tra đồ thị bằng chính mã sai đó.
+    resolved = resolve_company(name, limit=2)
+    if resolved["status"] != "ok":
+        return []
+
+    for candidate in [resolved["best"]] + resolved.get("alternatives", []):
         via_ticker = graph().run(
             """
             MATCH (c:Company)
@@ -386,9 +447,10 @@ def resolve_graph_entity(name: str, limit: int = 3) -> List[Dict]:
         if via_ticker:
             return via_ticker
 
-        # Tên chính thức của SEC thường dài hơn tên trong đồ thị; thử vài từ đầu
+        # Tên chính thức của SEC thường dài hơn tên trong đồ thị; thử vài từ đầu.
+        # Vẫn phải lọc độ tin cậy — đây là cửa cuối cùng, bỏ sót là lỗi quay lại.
         head = " ".join(candidate["name"].split()[:3])
-        via_name = graph().find_entity(head, limit=limit)
+        via_name = _strong(graph().find_entity(head, limit=limit))
         if via_name:
             return via_name
 
@@ -450,11 +512,14 @@ def graph_path(source: str, target: str, max_hops: int = 3) -> Dict[str, Any]:
 
 def company_coverage(company: str) -> Dict[str, Any]:
     """Cho biết hệ thống đang có gì về một doanh nghiệp — để agent nói thật với người dùng."""
-    cands = resolve_ticker(company)
-    if not cands:
-        return {"status": "not_found", "query": company}
+    resolved = resolve_company(company)
+    if resolved["status"] != "ok":
+        return {"status": "not_found", "query": company,
+                "suggestions": [s["name"] for s in resolved.get("suggestions", [])],
+                "hint": _NOT_IN_SEC_HINT}
 
-    best = cands[0]
+    best = resolved["best"]
+    cands = [best] + resolved.get("alternatives", [])
     rows = graph().run(
         """
         MATCH (c:Company {ticker: $ticker})

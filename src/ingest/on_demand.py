@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 import time
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from qdrant_client.http import models as qm
 
@@ -46,6 +46,42 @@ _SUFFIX = re.compile(
 def _simplify(text: str) -> str:
     text = _SUFFIX.sub("", (text or "").lower())
     return re.sub(r"[^a-z0-9 ]", " ", text).strip()
+
+
+def _head(simplified: str) -> str:
+    """Từ đầu tiên của tên đã đơn giản hóa — phần MANG BẢN SẮC của doanh nghiệp.
+
+    "Saga Communications" và "Acacia Communications" giống nhau tới 85% nếu so cả chuỗi,
+    vì chúng dùng chung từ "communications". Nhưng cái phân biệt hai công ty nằm ở từ đầu:
+    "saga" với "acacia" — hai từ chẳng liên quan gì. So thêm ở đầu chặn được đúng kiểu
+    nhầm này.
+    """
+    return (simplified or "").split(" ")[0]
+
+
+# --- Ngưỡng cho nhánh khớp gần đúng (bắt lỗi gõ sai) ---
+#
+# Ba con số này được chọn từ những ca SAI đo được trên dữ liệu thật, không phải đoán:
+#
+#     altera            ~ altria              0,833   <- phải LOẠI
+#     brother industries~ thor industries     0,848   <- phải LOẠI
+#     acacia comm...    ~ saga comm...        0,850   <- phải LOẠI
+#     microsft          ~ microsoft           0,941   <- phải GIỮ (gõ thiếu 1 ký tự)
+#     amazn / gogle / teslla                  0,909   <- phải GIỮ
+#
+# Ngưỡng cũ 0,82 nằm DƯỚI cả ba ca sai. 0,88 tách sạch hai nhóm mà vẫn dung thứ lỗi gõ.
+FUZZY_MIN_RATIO = 0.88
+# Từ đầu cũng phải giống, để từ chung ở đuôi không kéo điểm lên hộ.
+FUZZY_MIN_HEAD_RATIO = 0.80
+# Chuỗi càng ngắn càng dễ giống nhau do ngẫu nhiên. Dưới 5 ký tự thì khớp gần đúng
+# không còn ý nghĩa thống kê, chỉ sinh nhiễu.
+FUZZY_MIN_LEN = 5
+
+# Thứ tự hạng, mạnh trước yếu sau. "substring" xếp CUỐI vì nó gần như luôn sai.
+_MATCH_NAMES = ("ticker", "exact", "prefix", "word", "fuzzy", "substring")
+
+# Kiểu khớp KHÔNG đủ tin cậy để tự động chọn. Vẫn trả về, nhưng chỉ như một gợi ý.
+WEAK_MATCHES = {"substring"}
 
 
 _graph_ticker_by_cik: Optional[Dict[str, str]] = None
@@ -100,7 +136,8 @@ def resolve_ticker(query: str, limit: int = 5) -> List[Dict[str, str]]:
         info = tmap[q.upper()]
         return [{
             "ticker": _canonical_ticker(info["cik"], q.upper()),
-            "name": info["name"], "cik": info["cik"], "match": "ticker",
+            "name": info["name"], "cik": info["cik"],
+            "match": "ticker", "confidence": "high",
         }]
 
     q_simple = _simplify(q)
@@ -123,6 +160,8 @@ def resolve_ticker(query: str, limit: int = 5) -> List[Dict[str, str]]:
     # chứa "ford" và tên lại NGẮN HƠN "Ford Motor Co", nên thắng ở tiêu chí độ dài.
     word_re = re.compile(rf"(?<![a-z0-9]){re.escape(q_simple)}(?![a-z0-9])")
 
+    q_head = _head(q_simple)
+
     scored = []
     for ticker, info in tmap.items():
         name_simple = _simplify(info["name"])
@@ -131,19 +170,31 @@ def resolve_ticker(query: str, limit: int = 5) -> List[Dict[str, str]]:
 
         # Hạng càng nhỏ càng khớp sát. Trong cùng hạng thì tên ngắn hơn thắng.
         if name_simple == q_simple:
-            rank = 0                                   # trùng khít: "alphabet"
+            rank = 1                                   # trùng khít: "alphabet"
         elif name_simple.startswith(q_simple + " "):
-            rank = 1                                   # mở đầu bằng: "ford motor"
+            rank = 2                                   # mở đầu bằng: "ford motor"
         elif word_re.search(name_simple):
-            rank = 2                                   # đúng từ ở giữa tên
+            rank = 3                                   # đúng từ ở giữa tên
         elif q_simple in name_simple:
-            rank = 3                                   # chuỗi con: "crawford"
+            # CHUỖI CON THUẦN TÚY — hạng cuối, và bị đánh dấu là KHÔNG ĐÁNG TIN.
+            #
+            # Đo trên dữ liệu thật, nhánh này sai 100%:
+            #     "acer" nằm trong "M-ACER-ich"   -> Macerich (bất động sản)
+            #     "asco" nằm trong "M-ASCO"       -> Masco
+            #     "ey"   nằm trong "A-EY-e"       -> AEye
+            # Đều là trùng ký tự ngẫu nhiên giữa chừng một từ khác. Vẫn giữ lại để gợi ý
+            # "có phải bạn muốn hỏi…", nhưng không bao giờ được tự động chọn.
+            rank = 5
         else:
-            ratio = SequenceMatcher(None, q_simple, name_simple).ratio()
-            if ratio <= 0.82:
+            # Khớp gần đúng, chỉ để bắt lỗi gõ sai. Ba điều kiện phải cùng thỏa.
+            if len(q_simple) < FUZZY_MIN_LEN:
                 continue
-            rank = 4                                   # gõ sai: "microsft"
-            scored.append((rank, -ratio, ticker, info))
+            ratio = SequenceMatcher(None, q_simple, name_simple).ratio()
+            if ratio < FUZZY_MIN_RATIO:
+                continue
+            if SequenceMatcher(None, q_head, _head(name_simple)).ratio() < FUZZY_MIN_HEAD_RATIO:
+                continue
+            scored.append((4, -ratio, ticker, info))   # gõ sai: "microsft"
             continue
 
         scored.append((rank, len(name_simple), ticker, info))
@@ -160,14 +211,97 @@ def resolve_ticker(query: str, limit: int = 5) -> List[Dict[str, str]]:
         if info["cik"] in seen_cik:
             continue
         seen_cik.add(info["cik"])
+        match = _MATCH_NAMES[rank]
         out.append(
             {"ticker": _canonical_ticker(info["cik"], ticker),
              "name": info["name"], "cik": info["cik"],
-             "match": ("exact", "prefix", "word", "substring", "fuzzy")[rank]}
+             "match": match,
+             "confidence": "weak" if match in WEAK_MATCHES else "high"}
         )
         if len(out) >= limit:
             break
     return out
+
+
+def _suggest(query: str, k: int = 3) -> List[Dict[str, str]]:
+    """Vài cái tên gần nhất, CHỈ để gợi ý — không bao giờ được tự động chọn.
+
+    Vì sao cần: luật khớp ở trên cố tình siết chặt, nên "amazn" bị từ chối thẳng. Từ chối
+    là đúng, nhưng một lời từ chối cụt lủn thì vô dụng với người dùng. Hàm này nới ngưỡng
+    xuống rất thấp để đưa ra phỏng đoán, và dán nhãn `weak` để `resolve_company` không
+    bao giờ chọn chúng — người dùng đọc rồi tự quyết.
+
+    Đây là chỗ AN TOÀN để nới lỏng, vì kết quả không đi thẳng vào câu trả lời.
+    """
+    q = _simplify(query)
+    if len(q) < 3:
+        return []
+    q_head = _head(q)
+
+    pool = []
+    for ticker, info in load_ticker_map().items():
+        name_simple = _simplify(info["name"])
+        if not name_simple:
+            continue
+        score = max(
+            SequenceMatcher(None, q, name_simple).ratio(),
+            SequenceMatcher(None, q_head, _head(name_simple)).ratio(),
+        )
+        if score >= 0.72:
+            pool.append((-score, ticker, info))
+
+    pool.sort()
+    out, seen = [], set()
+    for _, ticker, info in pool:
+        if info["cik"] in seen:
+            continue
+        seen.add(info["cik"])
+        out.append({
+            "ticker": _canonical_ticker(info["cik"], ticker),
+            "name": info["name"], "cik": info["cik"],
+            "match": "guess", "confidence": "weak",
+        })
+        if len(out) >= k:
+            break
+    return out
+
+
+def resolve_company(query: str, limit: int = 5) -> Dict[str, Any]:
+    """Phân giải tên công ty, VÀ TỪ CHỐI khi không đủ chắc chắn.
+
+    ⚠️ ĐÂY LÀ LỚP CHẶN QUAN TRỌNG NHẤT CỦA TOÀN HỆ THỐNG.
+
+    Lỗi thật đã xảy ra trước khi có hàm này: người dùng hỏi doanh thu "Acer", hệ thống
+    trả về `status: ok` kèm doanh thu đầy đủ của MACERICH — một quỹ bất động sản trung
+    tâm thương mại. Hỏi "Altera" thì ra ALTRIA, công ty thuốc lá. Không một thông báo lỗi
+    nào. Số thì đúng, chủ thể thì sai, và người đọc không có cách nào biết.
+
+    Đây đúng là kiểu hỏng mà cả dự án được xây ra để ngăn: mọi con số đều lấy từ XBRL
+    chứ không cho mô hình tự đọc, nhưng công sức đó thành vô nghĩa nếu con số đúng bị
+    gắn nhầm tên doanh nghiệp.
+
+    SIẾT LUẬT KHỚP THÔI LÀ CHƯA ĐỦ. Dù có siết đến đâu thì một ngày nào đó vẫn sẽ có ca
+    khớp sai — bảng mã SEC có hơn 10.000 tên và luôn có những cái tình cờ giống nhau.
+    Nên tầng phòng thủ thật nằm ở đây: khớp yếu thì KHÔNG được tự động chọn, mà phải trả
+    về "không tìm thấy" kèm gợi ý. Thà nói không biết còn hơn nói sai một cách tự tin.
+
+    Trả về:
+        {"status": "ok", "best": {...}, "alternatives": [...]}
+        {"status": "not_found", "query": ..., "suggestions": [...]}
+    """
+    candidates = resolve_ticker(query, limit=limit)
+    strong = [c for c in candidates if c.get("confidence") == "high"]
+
+    if not strong:
+        # Ứng viên yếu vẫn trả về, nhưng dán nhãn rõ là gợi ý — để agent có thể hỏi lại
+        # "có phải bạn muốn hỏi…" thay vì im lặng bịa ra một câu trả lời.
+        return {
+            "status": "not_found",
+            "query": query,
+            "suggestions": candidates[:3] or _suggest(query),
+        }
+
+    return {"status": "ok", "best": strong[0], "alternatives": strong[1:limit]}
 
 
 def is_text_indexed(ticker: str, store: Optional[VectorStore] = None) -> int:
@@ -257,13 +391,22 @@ def ingest_company_text(
 
 
 def ensure_text_available(company_or_ticker: str) -> Dict:
-    """Điểm vào cho agent: nhận tên hoặc mã, đảm bảo văn bản đã sẵn sàng để tìm kiếm."""
-    candidates = resolve_ticker(company_or_ticker)
-    if not candidates:
-        return {"status": "not_found", "query": company_or_ticker}
+    """Điểm vào cho agent: nhận tên hoặc mã, đảm bảo văn bản đã sẵn sàng để tìm kiếm.
 
-    best = candidates[0]
+    ⚠️ Ở ĐÂY KHỚP SAI CÒN TỆ HƠN CẢ TRẢ VỀ SỐ SAI.
+
+    Trả về số sai thì chỉ hỏng một câu trả lời. Còn hàm này TẢI VỀ và GHI VĨNH VIỄN văn
+    bản 10-K vào vector store: khớp nhầm nghĩa là báo cáo của một doanh nghiệp khác nằm
+    lại trong chỉ mục dưới mã sai, và mọi câu hỏi sau đó về mã ấy đều lấy nhầm nguồn.
+    Nên chỗ này bắt buộc dùng resolve_company, tuyệt đối không lấy ứng viên đầu tiên.
+    """
+    resolved = resolve_company(company_or_ticker)
+    if resolved["status"] != "ok":
+        return {"status": "not_found", "query": company_or_ticker,
+                "suggestions": [s["name"] for s in resolved.get("suggestions", [])]}
+
+    best = resolved["best"]
     result = ingest_company_text(best["ticker"])
     result["company"] = best["name"]
-    result["alternatives"] = [c["ticker"] for c in candidates[1:4]]
+    result["alternatives"] = [c["ticker"] for c in resolved.get("alternatives", [])[:3]]
     return result

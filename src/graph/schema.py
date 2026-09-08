@@ -63,6 +63,14 @@ RELATION_TYPES: List[tuple] = [
 ]
 
 RELATION_NAMES: List[str] = [r[0] for r in RELATION_TYPES]
+
+# Cạnh HẠ TẦNG — nối doanh nghiệp với bản ghi năm tài chính và với hồ sơ đã nộp. Chúng
+# không phải tri thức trích xuất được, và phải bị loại khỏi mọi truy vấn duyệt đồ thị.
+#
+# Vì sao đủ quan trọng để đặt thành hằng số: HAS_FINANCIALS có 48.025 cạnh, nhiều gấp
+# 25 lần toàn bộ tri thức thật cộng lại. Quên loại chúng ra một lần là kết quả bị chúng
+# nhấn chìm hoàn toàn — đã xảy ra thật, xem chú thích trong GraphStore.neighbors.
+INFRA_RELATIONS: List[str] = ["HAS_FINANCIALS", "FILED"]
 RELATION_SPEC: Dict[str, tuple] = {r[0]: (r[1], r[2], r[3]) for r in RELATION_TYPES}
 
 # Ánh xạ các cách diễn đạt LLM hay tự chế về đúng nhãn trong bộ đóng.

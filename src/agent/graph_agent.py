@@ -336,6 +336,33 @@ def _all_tools_succeeded(observations: List[Dict[str, Any]]) -> bool:
     return True
 
 
+def _company_not_in_universe(observations: List[Dict[str, Any]]) -> bool:
+    """Mọi công cụ đều báo doanh nghiệp không có trong dữ liệu SEC?
+
+    ⚠️ CÓ NHỮNG THẤT BẠI KHÔNG THỂ CỨU BẰNG CÁCH THỬ LẠI.
+
+    Vòng lặp suy xét sinh ra để xử lý trường hợp "chọn nhầm công cụ, thử cái khác". Nhưng
+    khi cái tên người dùng hỏi vốn KHÔNG nằm trong vũ trụ 6.255 doanh nghiệp SEC, thì
+    không công cụ nào lấy được dữ liệu về nó — thử thêm bao nhiêu vòng cũng vậy.
+
+    Đo thật trước khi có hàm này, với câu hỏi về "Acer" (niêm yết ở Đài Loan):
+        định tuyến 5,5s -> tra số liệu not_found -> suy xét 9,2s -> kiểm tra độ phủ
+        not_found -> tìm văn bản -> suy xét 105,7s -> tìm văn bản ...
+    Hơn hai phút để cuối cùng vẫn phải nói "không có dữ liệu" — câu trả lời đã biết chắc
+    ngay từ giây thứ sáu.
+
+    Chỉ dừng khi TOÀN BỘ quan sát đều là thất bại phân giải. Nếu có bất kỳ công cụ nào
+    lấy được dữ liệu thật, vòng lặp vẫn chạy bình thường.
+    """
+    if not observations:
+        return False
+    terminal = {"not_found", "company_not_found"}
+    return all(
+        isinstance(o.get("result"), dict) and o["result"].get("status") in terminal
+        for o in observations
+    )
+
+
 def node_reflect(state: AgentState) -> AgentState:
     """Khối 3 — LLM xem dữ liệu đã đủ chưa.
 
@@ -354,6 +381,17 @@ def node_reflect(state: AgentState) -> AgentState:
     """
     if state.get("round", 0) >= MAX_ROUNDS:
         return {**state, "calls": [], "reflection": "đã đạt giới hạn số vòng"}
+
+    # Cái tên không có trong vũ trụ SEC -> mọi vòng lặp thêm đều vô ích. Dừng ngay và
+    # để khối trả lời nói thật, thay vì đốt hơn hai phút rồi vẫn kết luận y như vậy.
+    if _company_not_in_universe(state.get("observations", [])):
+        trace = state.get("trace", [])
+        trace.append({
+            "step": "suy xét", "seconds": 0.0, "sufficient": True,
+            "missing": "doanh nghiệp không có trong dữ liệu SEC — thử thêm công cụ cũng vô ích",
+            "next": [],
+        })
+        return {**state, "calls": [], "trace": trace}
 
     if state.get("round", 0) == 1 and _all_tools_succeeded(state.get("observations", [])):
         trace = state.get("trace", [])

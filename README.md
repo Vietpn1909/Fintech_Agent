@@ -321,6 +321,83 @@ Phải so khớp sau khi **bỏ hết ký tự không phải chữ/số**.
 
 ---
 
+## Hai lỗi "im lặng" nặng nhất, tìm ra khi tự rà lại hệ thống
+
+Cả hai đều trả về `status: ok`. Không exception, không cảnh báo, không có gì trong log.
+Chúng chỉ lộ ra khi đi kiểm tra thủ công những cái tên nằm ngoài nhóm quen thuộc.
+
+### A. Phân giải tên doanh nghiệp khớp sai một cách tự tin
+
+```
+Hỏi "Acer"    ->  trả về MACERICH CO (MAC)       status: ok, doanh thu đầy đủ
+Hỏi "Altera"  ->  trả về ALTRIA GROUP (MO)       status: ok, doanh thu đầy đủ
+```
+
+Macerich là quỹ bất động sản trung tâm thương mại. Altria là thuốc lá.
+
+Đây là kiểu hỏng tệ nhất trong cả hệ thống, vì nó **vô hiệu hóa chính nguyên tắc trung
+tâm của dự án**. Cả kiến trúc được dựng lên để con số không bao giờ đi qua mô hình ngôn
+ngữ — nhưng công sức đó thành vô nghĩa nếu con số đúng bị gắn nhầm tên doanh nghiệp.
+
+Có **hai** nhánh cùng sai, không phải một:
+
+| Nhánh | Ví dụ đo được | Vì sao sai |
+|---|---|---|
+| `substring` | `acer` ⊂ **Ma**cer**ich** · `asco` ⊂ **M**asco · `ey` ⊂ A**ey**e | Trùng ký tự ngẫu nhiên giữa chừng một từ khác |
+| `fuzzy` ngưỡng 0,82 | altera~altria `0,833` · *acacia* communications ~ *saga* communications `0,850` | Từ chung ở đuôi ("communications") kéo điểm lên hộ, phần phân biệt thì khác hẳn |
+
+**Sửa ở ba tầng**, vì siết luật khớp thôi là chưa đủ — bảng mã SEC có hơn 10.000 tên,
+sớm muộn vẫn sẽ có ca tình cờ giống nhau:
+
+1. **Luật khớp**: `substring` bị hạ xuống hạng không đáng tin; `fuzzy` nâng ngưỡng lên
+   0,88 **và** bắt buộc từ đầu tiên cũng phải giống ≥ 0,80, **và** chuỗi phải dài ≥ 5 ký tự.
+2. **Nhãn độ tin cậy**: mỗi ứng viên mang `confidence: high | weak`.
+3. **Lớp chặn ở tầng gọi** — quan trọng nhất: `resolve_company()` **từ chối** khớp yếu,
+   trả về `not_found` kèm gợi ý. Mọi công cụ đều đi qua nó. Dù luật khớp có sai trong
+   tương lai, hệ thống sẽ nói "không chắc" chứ không nói sai một cách tự tin.
+
+Ngưỡng 0,88 không phải số chọn bừa: nó nằm **trên** cả ba ca sai đo được (0,833 / 0,848 /
+0,850) và **dưới** các ca gõ sai cần giữ (`microsft`→Microsoft 0,941, `teslla`→Tesla 0,909).
+
+Có một chỗ cố ý **không** nới: `amazn` bị từ chối. Nới đủ để nhận `amazn` thì `azure` sẽ
+khớp `Azul` (hãng bay Brazil, độ giống 0,889) — đúng loại lỗi đang sửa. Thay vào đó, lời
+từ chối kèm gợi ý để người dùng tự chọn.
+
+Nguy hiểm nhất không phải `lookup_financials` mà là `ensure_text_available`: nó **tải về
+và ghi vĩnh viễn** 10-K vào vector store. Khớp nhầm ở đó nghĩa là báo cáo của doanh
+nghiệp khác nằm lại trong chỉ mục dưới mã sai, và mọi câu hỏi sau đều lấy nhầm nguồn.
+
+Khóa lại bằng `tests/test_resolver.py`: **16 ca phải từ chối · 30 ca phải vẫn nhận đúng**.
+Nhóm thứ hai quan trọng ngang nhóm thứ nhất — sửa lỗi mà làm hỏng chức năng đang chạy thì
+không phải là sửa.
+
+### B. `graph_neighbors` bị cạnh hạ tầng nhấn chìm
+
+Đo trước khi sửa, với `limit=12`:
+
+| Thực thể | Cạnh trả về |
+|---|---|
+| NVIDIA | 12/12 hạ tầng · **0 tri thức** |
+| Microsoft | 12/12 hạ tầng · **0 tri thức** |
+| Apple | 12/12 hạ tầng · **0 tri thức** |
+
+Công cụ duyệt đồ thị tri thức trả về **không một quan hệ tri thức nào** cho ba doanh
+nghiệp được phủ tốt nhất — mà vẫn báo `status: ok`, nên agent tin là đã tra xong và kết
+luận chúng không có quan hệ nào trong đồ thị.
+
+Hai nguyên nhân chồng lên nhau:
+
+- Truy vấn khớp **mọi** loại cạnh, kể cả 48.025 cạnh `HAS_FINANCIALS` — nhiều gấp 25 lần
+  toàn bộ tri thức thật cộng lại.
+- `ORDER BY r.confidence DESC` — trong Neo4j, `NULL` được xếp **lên đầu** khi sắp giảm
+  dần, mà cạnh hạ tầng thì không có thuộc tính `confidence`. Chúng chiếm sạch 12 chỗ.
+
+Sửa: loại `INFRA_RELATIONS` ngay trong mệnh đề `WHERE`, và đổi sang
+`ORDER BY coalesce(r.confidence, 0) DESC` để cạnh thiếu điểm không nhảy lên đầu lần nữa.
+Sau khi sửa: **0 hạ tầng + 12 tri thức** cho cả sáu doanh nghiệp đã thử.
+
+---
+
 ## Kết quả đánh giá
 
 Bộ 37 câu hỏi, model `gemma-4-26b-a4b-qat` chạy local:
@@ -461,6 +538,8 @@ web/static/styles.css       Hệ thiết kế dùng chung: màu, nút, chuyển 
 web/static/chat.css         Riêng cho trang trò chuyện
 web/static/home.js          Hiện dần khi cuộn, đếm số, đổ số liệu thật vào trang
 web/static/chat.js          Đọc SSE, dựng Markdown, gấp dấu vết agent lại
+tests/test_resolver.py      Kiểm thử hồi quy bộ phân giải tên: 16 ca phải từ chối,
+                            30 ca phải vẫn nhận đúng
 run_web.py                  Kiểm tra phụ thuộc rồi khởi động máy chủ
 app/streamlit_app.py        (cũ) Giao diện Streamlit — giữ lại để gỡ lỗi, xem mục Giao diện web
 scripts/                    Các bước chạy, đánh số theo thứ tự

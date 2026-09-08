@@ -28,7 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from neo4j import GraphDatabase
 
 from config.settings import settings
-from src.graph.schema import RELATION_NAMES
+from src.graph.schema import INFRA_RELATIONS, RELATION_NAMES
 
 
 class GraphStore:
@@ -267,10 +267,25 @@ class GraphStore:
         #
         # Dùng startNode(r) / endNode(r) để lấy chiều thật, kèm trường `direction` cho
         # biết thực thể đang hỏi đứng ở đầu nào.
+        # ⚠️ PHẢI LOẠI CẠNH HẠ TẦNG, NẾU KHÔNG CÔNG CỤ NÀY VÔ DỤNG.
+        #
+        # Mẫu MATCH ở trên khớp MỌI loại cạnh, kể cả 48.025 cạnh HAS_FINANCIALS nối công
+        # ty với từng năm tài chính. Tệ hơn: `ORDER BY r.confidence DESC` xếp NULL lên
+        # ĐẦU trong Neo4j, mà cạnh hạ tầng thì không có thuộc tính confidence.
+        #
+        # Hậu quả đo được trước khi sửa, với limit=12:
+        #     NVIDIA    -> 12/12 cạnh hạ tầng,  0 quan hệ tri thức
+        #     Microsoft -> 12/12 cạnh hạ tầng,  0 quan hệ tri thức
+        #     Apple     -> 12/12 cạnh hạ tầng,  0 quan hệ tri thức
+        # Công cụ trả về `status: ok` nên agent tin là đã tra xong và kết luận ba doanh
+        # nghiệp này không có quan hệ nào trong đồ thị — sai, và không có lỗi nào báo ra.
+        #
+        # coalesce ở phần sắp xếp để cạnh thiếu confidence không lại nhảy lên đầu lần nữa.
         return self.run(
             f"""
             MATCH (a)-[r{rel_filter}]-(b)
             WHERE toLower(a.name) = toLower($name)
+              AND NOT type(r) IN $infra
             RETURN startNode(r).name AS source,
                    type(r) AS relation,
                    endNode(r).name AS target,
@@ -281,10 +296,10 @@ class GraphStore:
                    labels(b)[0] AS neighbor_type,
                    r.evidence AS evidence, r.doc_id AS doc_id,
                    r.ticker AS ticker, r.confidence AS confidence
-            ORDER BY r.confidence DESC
+            ORDER BY coalesce(r.confidence, 0) DESC
             LIMIT $limit
             """,
-            name=name, limit=limit,
+            name=name, limit=limit, infra=INFRA_RELATIONS,
         )
 
     def path_between(self, source: str, target: str, max_hops: int = 3) -> List[Dict]:
@@ -351,16 +366,23 @@ class GraphStore:
         needle = (fragment or "").strip().lower()
         word_re = _re.compile(rf"(?<![a-z0-9]){_re.escape(needle)}(?![a-z0-9])")
 
-        def rank(row: Dict) -> tuple:
+        def tier_of(row: Dict) -> int:
             name = (row["name"] or "").lower()
             if name == needle:
-                tier = 0
-            elif word_re.match(name):
-                tier = 1
-            elif word_re.search(name):
-                tier = 2
-            else:
-                tier = 3
-            return (tier, row["type"] != prefer_type, len(name))
+                return 0
+            if word_re.match(name):
+                return 1
+            if word_re.search(name):
+                return 2
+            return 3
 
-        return sorted(rows, key=rank)[:limit]
+        def rank(row: Dict) -> tuple:
+            return (tier_of(row), row["type"] != prefer_type, len(row["name"] or ""))
+
+        # Hạng 3 = chỉ chứa chuỗi, không theo ranh giới từ. Đây đúng là nhánh đã sinh ra
+        # "AMD" -> "Amdocs". Vẫn trả về, nhưng đánh dấu `weak` để phía gọi từ chối dùng
+        # nó làm điểm xuất phát cho truy vấn đồ thị.
+        out = []
+        for row in sorted(rows, key=rank)[:limit]:
+            out.append({**row, "confidence": "weak" if tier_of(row) == 3 else "high"})
+        return out
