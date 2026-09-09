@@ -346,9 +346,25 @@ def resolve_company(query: str, limit: int = 5) -> Dict[str, Any]:
         {"status": "ok", "best": {...}, "alternatives": [...]}
         {"status": "not_found", "query": ..., "suggestions": [...]}
     """
+    # ⚠️ PHẢI CÓ CÁCH NÓI "Ý TÔI LÀ BÊN MỸ", KHÔNG CHỈ "Ý TÔI LÀ BÊN VIỆT NAM".
+    #
+    # Hậu tố `.VN` cho phép chỉ đích danh sàn Việt Nam. Nhưng chiều ngược lại thì không có
+    # gì cả: gọi lại bằng mã trần "ABT" sẽ lại rơi vào nhánh nhập nhằng ngay bên dưới, nên
+    # agent hỏi người dùng, người dùng trả lời "bên Mỹ", rồi agent không có cách nào diễn
+    # đạt điều đó — hỏi vòng vo mãi không thoát.
+    #
+    # Ở mức 30 mã VN30 (8 mã trùng) thì hiếm khi gặp. Khi vũ trụ Việt Nam lên 1.586 mã thì
+    # có 302 mã trùng với doanh nghiệp Mỹ ĐANG CÓ dữ liệu — trong đó có ABT (Abbott), ADP,
+    # AIG. Lúc đó đây không còn là chuyện hiếm mà là ngõ cụt thường trực.
+    raw = (query or "").strip()
+    force_us = raw.upper().endswith(".US")
+    if force_us:
+        raw = raw[:-3]
+        query = raw
+
     candidates = resolve_ticker(query, limit=limit)
     strong = [c for c in candidates if c.get("confidence") == "high"]
-    vn = _resolve_vn(query)
+    vn = [] if force_us else _resolve_vn(query)
 
     # ⚠️ MÃ TRÙNG GIỮA HAI SÀN — KHÔNG ĐƯỢC TỰ CHỌN BÊN NÀO.
     #
@@ -368,7 +384,8 @@ def resolve_company(query: str, limit: int = 5) -> Dict[str, Any]:
             "options": [strong[0], vn[0]],
             "hint": (f"Mã '{query}' vừa là doanh nghiệp Mỹ ({strong[0]['name']}) vừa là "
                      f"doanh nghiệp Việt Nam ({vn[0]['name']}). Hãy hỏi lại người dùng ý "
-                     f"nào, hoặc gọi lại với '{vn[0]['ticker']}' cho bên Việt Nam."),
+                     f"nào, rồi gọi lại với '{vn[0]['ticker']}' cho bên Việt Nam hoặc "
+                     f"'{strong[0]['ticker']}.US' cho bên Mỹ."),
         }
 
     if vn and not strong:

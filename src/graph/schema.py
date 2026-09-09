@@ -64,6 +64,22 @@ RELATION_TYPES: List[tuple] = [
 
 RELATION_NAMES: List[str] = [r[0] for r in RELATION_TYPES]
 
+# Quan hệ lấy từ nguồn CÓ CẤU TRÚC — không phải LLM trích ra.
+#
+# ⚠️ VÌ SAO KHÔNG BỎ THẲNG VÀO `RELATION_TYPES`.
+#
+# `RELATION_TYPES` là bộ enum ép vào JSON schema của LLM — mọi thứ nằm trong đó là thứ mô
+# hình ĐƯỢC PHÉP TỰ CHẾ ra khi đọc văn bản. Quan hệ sở hữu thì không được vậy: "ai nắm bao
+# nhiêu phần trăm" là số liệu công bố, không phải điều suy ra từ câu chữ. Cho mô hình quyền
+# sinh ra `OWNED_BY` là mở đường để nó đọc câu "NVIDIA hợp tác với ARM" rồi kết luận NVIDIA
+# sở hữu ARM.
+#
+# Nên chúng nằm riêng: agent TRUY VẤN được, nhưng LLM không SINH được.
+STRUCTURED_RELATIONS: List[str] = ["OWNED_BY"]
+
+# Bộ quan hệ agent được phép lọc khi duyệt đồ thị — gồm cả hai nguồn.
+QUERYABLE_RELATIONS: List[str] = RELATION_NAMES + STRUCTURED_RELATIONS
+
 # Cạnh HẠ TẦNG — nối doanh nghiệp với bản ghi năm tài chính và với hồ sơ đã nộp. Chúng
 # không phải tri thức trích xuất được, và phải bị loại khỏi mọi truy vấn duyệt đồ thị.
 #

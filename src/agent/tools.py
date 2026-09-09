@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from src.graph.schema import RELATION_NAMES
+from src.graph.schema import QUERYABLE_RELATIONS
 from src.graph.store import GraphStore
 from src.ingest.on_demand import ensure_text_available, is_text_indexed, resolve_company
 from src.ingest.xbrl import METRIC_LABELS
@@ -508,7 +508,10 @@ def graph_neighbors(entity: str, relations: Optional[List[str]] = None, limit: i
     bộ thời gian trả lời. 12 quan hệ đã đủ để lập luận, mà rẻ hơn một nửa.
     """
     if relations:
-        relations = [r for r in relations if r in RELATION_NAMES]
+        # QUERYABLE_ chứ không phải RELATION_NAMES: bộ sau là enum của LLM khi trích
+        # xuất, không gồm quan hệ lấy từ nguồn có cấu trúc như OWNED_BY. Lọc bằng nó
+        # thì agent xin lọc theo OWNED_BY sẽ bị bỏ lặng lẽ và trả về rỗng.
+        relations = [r for r in relations if r in QUERYABLE_RELATIONS]
 
     matches = resolve_graph_entity(entity)
     if not matches:

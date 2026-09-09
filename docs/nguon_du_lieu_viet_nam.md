@@ -146,6 +146,59 @@ Ba việc chồng lên nhau, mỗi việc đều có thể hỏng riêng:
 Bước 3 là chỗ nguy hiểm nhất: nó động vào dữ liệu đang chạy đúng. Nếu làm, phải nhúng vào
 một collection mới và chỉ đổi tên khi đã đối chiếu xong, chứ không ghi đè.
 
+## Đã làm gì sau khảo sát (cập nhật 2026-09-09)
+
+Làm **A** và **B**. **C** vẫn để nguyên là mục riêng.
+
+| | Trước | Sau |
+|---|---|---|
+| Doanh nghiệp Việt Nam | 30 | **1.532** |
+| Bản ghi năm tài chính | 240 | **11.777** |
+| Cạnh sở hữu | 0 | **10.701** |
+| Tổ chức bắc cầu ≥2 DN | 0 | **515** |
+
+Năng lực mới mở ra: sàng lọc toàn thị trường Việt Nam (*"doanh nghiệp nào doanh thu lớn
+nhất 2024"* → PLX 284 nghìn tỷ · VIC 189 · HPG 139), và cấu trúc công ty mẹ/công ty con
+(FPT nắm 46,5% FPT Retail, 45,7% FPT Telecom, 23,9% FPT Online).
+
+### Bốn lỗi âm thầm phát hiện được trong lúc làm
+
+Ghi lại vì cả bốn đều thuộc loại "kết quả trông hoàn toàn hợp lệ, không báo lỗi gì".
+
+**1. Trộn khái niệm doanh thu ở nhóm bảo hiểm.** Bảng báo cáo của VCI không có hai khuôn
+mà năm khuôn. Nhóm bảo hiểm khớp `isi64` = *"Net sales from insurance business"* qua nhánh
+so khớp "bắt đầu bằng", nên BVH 2024 ra 39.823 tỷ **không kèm nhãn nào** — đó là doanh thu
+mảng bảo hiểm, không gồm thu nhập đầu tư tài chính. Ở mức 30 mã VN30 chỉ có một doanh
+nghiệp bảo hiểm nên lọt lưới; ở mức 1.532 mã có 102 bản ghi như vậy. Đã thay hằng số
+`_BANK_REVENUE_TITLE` bằng bảng `_REVENUE_BASIS` phủ cả ba nhóm.
+
+**2. Nhập nhằng mã chứng khoán thành ngõ cụt.** 308 mã Việt Nam trùng mã doanh nghiệp Mỹ
+đang có dữ liệu (ABT/Abbott, ADP, AIG…). Hệ thống báo nhập nhằng — đúng — nhưng chỉ có
+hậu tố `.VN` để chỉ đích danh bên Việt Nam, **không có gì để nói "ý tôi là bên Mỹ"**. Agent
+hỏi lại, người dùng đáp "bên Mỹ", agent không diễn đạt được nên hỏi vòng vo mãi. Đã thêm
+hậu tố `.US` đối xứng.
+
+**3. Ghép nhầm người trùng tên.** Gộp node chủ sở hữu theo tên thì với tổ chức là ổn
+(515 trường hợp bắc cầu, chỉ 2 ghép nhầm, đều là cách viết khác của cùng một đơn vị) nhưng
+với cá nhân thì sai nặng: **121/771** chứng minh được là những người khác nhau —
+`Nguyen Van Thanh` gộp làm một từ *Nguyễn Văn Thành / Nguyễn Văn Thạnh / Nguyễn Văn Thanh*,
+đứng tên ở 12 doanh nghiệp. Nạp nguyên vậy thì đồ thị dựng ra 770 đường đi bịa. Đã gắn mã
+doanh nghiệp vào tên cá nhân (`Truong Gia Binh (FPT)`); script thoát với mã lỗi nếu còn cá
+nhân nào bắc cầu.
+
+**4. Node trùng giữa `:Company` và `:Organization`.** Chủ sở hữu là doanh nghiệp niêm yết
+thì bị tạo thêm một node `:Organization` cùng tên — **318 trường hợp**. `neighbors()` khớp
+theo tên nên gộp cả hai lại và in ra *"FPT Digital Retail nắm 46,54% FPT"*, ngược hoàn toàn
+chiều sở hữu. Dữ liệu đúng, hiển thị sai. Đã sửa: chủ sở hữu nào là doanh nghiệp đã có
+trong đồ thị thì nối thẳng vào node đó — nhờ vậy mới có cạnh sở hữu giữa hai doanh nghiệp.
+
+### Điều còn phải nói thẳng
+
+Sau bước này `tier='graph'` nhảy từ 95 lên 1.619. **Hai con số đó không cùng nghĩa.** 95
+doanh nghiệp có quan hệ trích từ hồ sơ (cạnh thưa, giàu ngữ nghĩa, mỗi cạnh một lần gọi
+LLM); 1.524 doanh nghiệp có quan hệ sở hữu (cạnh dày, chỉ nói ai nắm bao nhiêu của ai,
+không tốn lần gọi nào). Giao diện đếm riêng hai loại chứ không cộng chung.
+
 ## Khuyến nghị
 
 Làm **A và B trước**. Cả hai đều là nguồn có cấu trúc sẵn, không cần LLM, không đụng vào

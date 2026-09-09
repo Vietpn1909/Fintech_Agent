@@ -101,6 +101,29 @@ def main() -> int:
 
     print()
     print("=" * 78)
+    print("NHÓM 3b — phải có cách thoát khỏi nhập nhằng theo CẢ HAI chiều")
+    print("=" * 78)
+    # Hậu tố `.VN` đã có từ đầu. `.US` là chiều còn thiếu, và thiếu nó thì nhập nhằng
+    # thành ngõ cụt: agent hỏi "ý bạn là bên nào", người dùng đáp "bên Mỹ", agent không
+    # có cách nào diễn đạt lại nên hỏi vòng vo mãi. Ở mức 30 mã thì hiếm; ở mức 1.586 mã
+    # Việt Nam thì có 302 mã trùng doanh nghiệp Mỹ đang có dữ liệu.
+    for symbol, _ in MUST_BE_AMBIGUOUS:
+        us = resolve_company(f"{symbol}.US")
+        vn = resolve_company(f"{symbol}.VN")
+        ok_us = us["status"] == "ok" and not (us["best"].get("ticker") or "").endswith(".VN")
+        ok_vn = vn["status"] == "ok" and (vn["best"].get("ticker") or "").endswith(".VN")
+        if ok_us and ok_vn:
+            print(f"  đúng  {symbol:6} .US -> {us['best']['name'][:32]:<34} "
+                  f".VN -> {vn['best']['name'][:26]}")
+        else:
+            if not ok_us:
+                failures.append(f"{symbol}.US lẽ ra ra doanh nghiệp Mỹ, nhận được {us}")
+            if not ok_vn:
+                failures.append(f"{symbol}.VN lẽ ra ra doanh nghiệp Việt Nam, nhận được {vn}")
+            print(f"  SAI   {symbol:6} .US={us.get('status')} .VN={vn.get('status')}")
+
+    print()
+    print("=" * 78)
     print("NHÓM 4 — so sánh khác đồng tiền phải bị chặn")
     print("=" * 78)
     mixed = compare_financials(companies=["FPT", "Apple"], metric="revenue", year=2024)
@@ -113,7 +136,7 @@ def main() -> int:
 
     print()
     print("=" * 78)
-    total = len(MUST_RESOLVE_VN) + len(MUST_BE_AMBIGUOUS) + len(MUST_STAY_US) + 1
+    total = len(MUST_RESOLVE_VN) + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for item in failures:

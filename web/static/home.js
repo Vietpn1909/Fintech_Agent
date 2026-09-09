@@ -34,6 +34,12 @@ async function loadStats() {
       knowledge_edges: s.knowledge_edges,
       relation_types: s.relation_types,
       tier_graph: s.tiers.graph,
+      // Tách hai nguồn: đồ thị trích từ hồ sơ 10-K (thưa, giàu ngữ nghĩa) và đồ thị
+      // sở hữu lấy từ dữ liệu có cấu trúc (dày, chỉ nói ai nắm bao nhiêu của ai).
+      // Gộp làm một con số là ngầm khoe phần đắt tiền lớn gấp 17 lần thực tế.
+      tier_graph_filings: s.tiers.graph_from_filings,
+      tier_graph_ownership: s.tiers.graph_from_ownership,
+      ownership_edges: s.ownership_edges,
     };
     // Trang HTML có sẵn số dự phòng để vẫn đọc được khi backend chưa chạy — ở đây chỉ
     // ghi đè bằng số THẬT lấy từ Neo4j và Qdrant.

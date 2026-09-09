@@ -28,7 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from neo4j import GraphDatabase
 
 from config.settings import settings
-from src.graph.schema import INFRA_RELATIONS, RELATION_NAMES
+from src.graph.schema import INFRA_RELATIONS, QUERYABLE_RELATIONS, RELATION_NAMES
 
 
 class GraphStore:
@@ -66,6 +66,10 @@ class GraphStore:
             "CREATE CONSTRAINT person_name IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS UNIQUE",
             "CREATE CONSTRAINT regulator_name IF NOT EXISTS FOR (r:Regulator) REQUIRE r.name IS UNIQUE",
             "CREATE CONSTRAINT geo_name IF NOT EXISTS FOR (g:Geography) REQUIRE g.name IS UNIQUE",
+            # Chủ sở hữu là tổ chức (quỹ đầu tư, tổng công ty nhà nước, ngân hàng nước
+            # ngoài). Nhãn riêng chứ không dùng Company: họ không niêm yết, không có số
+            # liệu, và đếm họ vào "doanh nghiệp" sẽ thổi phồng con số trên trang chủ.
+            "CREATE CONSTRAINT org_name IF NOT EXISTS FOR (o:Organization) REQUIRE o.name IS UNIQUE",
             "CREATE INDEX company_ticker IF NOT EXISTS FOR (c:Company) ON (c.ticker)",
             "CREATE INDEX finyear_lookup IF NOT EXISTS FOR (fy:FinancialYear) ON (fy.ticker, fy.fiscal_year)",
             # Index cho câu hỏi sàng lọc kiểu "công ty nào doanh thu lớn nhất năm 2024"
@@ -140,6 +144,9 @@ class GraphStore:
             SET c.market = 'VN',
                 c.exchange = coalesce(row.exchange, 'HOSE'),
                 c.symbol = row.symbol,
+                // Ngành do VCI phân loại. Giữ lại vì khi vũ trụ Việt Nam lên gần 1.600 mã
+                // thì "doanh nghiệp thép nào lãi nhất" mới là câu hỏi trả lời được.
+                c.sector = coalesce(row.sector, c.sector),
                 c.tier = coalesce(c.tier, 'metrics'),
                 // Khác với doanh nghiệp SEC (dùng ON CREATE SET để giữ tên đẹp đã gộp
                 // bằng tay), tên doanh nghiệp Việt Nam luôn ghi đè từ nguồn: VCI là
@@ -178,6 +185,114 @@ class GraphStore:
             """,
             tickers=tickers, tier=tier, rank=rank,
         )
+
+    def upsert_shareholders(self, rows: List[Dict[str, Any]]) -> int:
+        """Cạnh sở hữu (Company)-[:OWNED_BY]->(Person|Organization).
+
+        ⚠️ CHỦ SỞ HỮU KHÔNG ĐƯỢC MANG NHÃN `Company`.
+
+        Phần lớn là quỹ đầu tư và cá nhân — không niêm yết, không có số liệu tài chính,
+        không nằm trong vũ trụ tra cứu. Gắn nhãn Company cho họ sẽ làm mọi con số "bao
+        nhiêu doanh nghiệp" phồng lên hàng nghìn, đúng kiểu đếm nhầm mà `collect_stats`
+        vừa phải tách ra để sửa. Nên: INDIVIDUAL -> :Person, CORPORATE -> :Organization.
+
+        MERGE theo tên vì nguồn không cấp mã định danh nào cho chủ sở hữu. Đây là điểm yếu
+        đã biết: "Norges Bank" và "NORGES BANK" sẽ thành hai node. Chấp nhận được vì tên
+        tiếng Anh của VCI khá nhất quán, và bước gộp thực thể (script 09) xử lý được phần
+        còn lại — nhưng phải nói ra chứ không giấu.
+
+        Cạnh mang theo `percent` và `as_of`: tỷ lệ sở hữu thay đổi liên tục, một con số
+        không kèm ngày công bố là con số không kiểm chứng được.
+        """
+        if not rows:
+            return 0
+
+        # ⚠️ CHỦ SỞ HỮU LÀ DOANH NGHIỆP ĐÃ CÓ TRONG ĐỒ THỊ THÌ PHẢI NỐI VÀO CHÍNH NODE ĐÓ.
+        #
+        # Bản đầu tạo node :Organization cho mọi chủ sở hữu là tổ chức. Kết quả: "FPT
+        # Corporation" tồn tại HAI node — một :Company mã FPT.VN, một :Organization sinh ra
+        # vì FPT đứng tên cổ đông của FPT Retail. Đo được 318 trường hợp trùng như vậy.
+        #
+        # Hậu quả không chỉ là dư node. `neighbors()` khớp theo TÊN, nên nó gộp cả hai node
+        # lại và in ra "FPT Digital Retail nắm 46,54% FPT Corporation" — đọc ngược hoàn
+        # toàn chiều sở hữu. Dữ liệu đúng, hiển thị sai, và không có gì báo lỗi.
+        #
+        # Nối vào node Company có sẵn vừa xóa được node trùng, vừa sinh ra thứ giá trị nhất
+        # của cả bước này: cạnh sở hữu GIỮA HAI DOANH NGHIỆP — tức cấu trúc công ty mẹ/công
+        # ty con, thứ mà tầng số liệu không thể hiện được.
+        #
+        # Khớp CHÍNH XÁC theo tên đã hạ chữ thường, không khớp gần đúng. Khớp gần đúng ở
+        # đây sẽ tái tạo đúng lỗi Acer→Macerich, chỉ khác là trên quan hệ sở hữu.
+        known = {
+            (r["name"] or "").strip().lower(): r["ticker"]
+            for r in self.run(
+                "MATCH (c:Company) WHERE c.name IS NOT NULL AND c.ticker IS NOT NULL "
+                "RETURN c.name AS name, c.ticker AS ticker"
+            )
+        }
+        rows = [
+            {**r, "owner_ticker": known.get((r.get("owner_raw") or r.get("owner") or "").strip().lower())}
+            for r in rows
+        ]
+
+        # Doanh nghiệp không tự sở hữu chính mình. Cạnh tự nối không mang thông tin và làm
+        # hỏng mọi truy vấn đường đi.
+        linked = [r for r in rows if r.get("owner_ticker") and r["owner_ticker"] != r["ticker"]]
+        if linked:
+            self.run(
+                """
+                UNWIND $rows AS row
+                MATCH (c:Company {ticker: row.ticker})
+                MATCH (o:Company {ticker: row.owner_ticker})
+                MERGE (c)-[r:OWNED_BY]->(o)
+                SET r.percent = row.percent,
+                    r.shares = row.shares,
+                    r.position = row.position,
+                    r.as_of = row.as_of,
+                    r.ticker = row.ticker,
+                    r.source = 'VCI',
+                    r.evidence = coalesce(row.owner_raw, row.owner) + ' nắm ' +
+                                 toString(round(row.percent * 1000) / 10.0) + '% ' +
+                                 row.symbol + coalesce(' (công bố ' + row.as_of + ')', ''),
+                    r.confidence = row.percent
+                """,
+                rows=linked,
+            )
+
+        rest = [r for r in rows if not r.get("owner_ticker")]
+        for label in ("Person", "Organization"):
+            batch = [r for r in rest if r.get("owner_label") == label]
+            if not batch:
+                continue
+            self.run(
+                f"""
+                UNWIND $rows AS row
+                MATCH (c:Company {{ticker: row.ticker}})
+                MERGE (o:{label} {{name: row.owner}})
+                  ON CREATE SET o.source = 'VCI', o.kind = row.owner_kind
+                SET o.name_vi = coalesce(row.owner_vi, o.name_vi)
+                MERGE (c)-[r:OWNED_BY]->(o)
+                SET r.percent = row.percent,
+                    r.shares = row.shares,
+                    r.position = row.position,
+                    r.as_of = row.as_of,
+                    r.ticker = row.ticker,
+                    r.source = 'VCI',
+                    // `evidence` để `neighbors()` có gì hiển thị cho người đọc kiểm chứng,
+                    // giống câu văn bằng chứng của cạnh do LLM trích.
+                    // Câu bằng chứng dùng tên GỐC, không phải tên hiển thị đã gắn mã.
+                    // "Trương Gia Bình nắm 6.9% FPT" đọc được; "Trương Gia Bình (FPT) nắm
+                    // 6.9% FPT" thì lặp và khó đọc.
+                    r.evidence = coalesce(row.owner_raw, row.owner) + ' nắm ' +
+                                 toString(round(row.percent * 1000) / 10.0) + '% ' +
+                                 row.symbol + coalesce(' (công bố ' + row.as_of + ')', ''),
+                    // Tỷ lệ sở hữu làm độ tin cậy: `neighbors()` sắp xếp giảm dần theo
+                    // trường này, nên cổ đông lớn hiện trước cổ đông nhỏ.
+                    r.confidence = row.percent
+                """,
+                rows=batch,
+            )
+        return len(rows)
 
     def sync_graph_tier(self) -> Tuple[int, int]:
         """Đặt mức phủ 'graph' theo ĐÚNG những gì đồ thị đang có. Trả về (nâng, khai khống).
@@ -344,7 +459,7 @@ class GraphStore:
         """Các thực thể nối trực tiếp với một thực thể, kèm bằng chứng."""
         rel_filter = ""
         if relations:
-            allowed = [r for r in relations if r in RELATION_NAMES]
+            allowed = [r for r in relations if r in QUERYABLE_RELATIONS]
             if allowed:
                 rel_filter = ":" + "|".join(allowed)
         # ⚠️ PHẢI TRẢ VỀ ĐÚNG CHIỀU THẬT CỦA CẠNH.

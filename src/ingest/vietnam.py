@@ -84,9 +84,44 @@ _INCOME_TITLES: Dict[str, List[str]] = {
     "rnd_expense": ["research and development", "r&d expenses"],
 }
 
-# Tiêu đề cho biết con số doanh thu đến từ báo cáo ngân hàng chứ không phải doanh nghiệp
-# sản xuất/dịch vụ thông thường.
-_BANK_REVENUE_TITLE = "total operating income"
+# Khi dòng doanh thu KHÔNG phải "doanh thu bán hàng" thông thường thì phải ghi nhãn.
+#
+# Mỗi mục: tiêu đề tiếng Anh thật mà VCI trả về -> lời giải thích đi kèm số liệu.
+#
+# ⚠️ Vì sao cần bảng này chứ không chỉ một hằng số cho ngân hàng: khi mở rộng từ 30 mã
+# VN30 ra toàn sàn, bảng báo cáo không còn hai khuôn mà là NĂM khuôn khác nhau — đo thật
+# trên 19 mã thuộc các ngành khác nhau:
+#
+#     doanh nghiệp thường  BS122/IS25  ->  isa3  "Net sales"
+#     ngân hàng            BS86/IS26   ->  isb*  "Total operating income"
+#     công ty chứng khoán  BS208/IS79  ->  isa3  "Net sales"
+#     doanh nghiệp bảo hiểm BS151/IS84 ->  isi64 "Net sales from insurance business"
+#
+# Nhánh bảo hiểm là chỗ nguy hiểm nhất và nó từng lọt lưới: `_resolve_fields` khớp kiểu
+# "bắt đầu bằng", nên "Net sales from insurance business" khớp ứng viên "net sales" và
+# con số vào thẳng cột doanh thu KHÔNG kèm lời giải thích nào. BVH năm 2024 ra 39.823 tỷ
+# — đó là doanh thu thuần mảng bảo hiểm, không gồm thu nhập đầu tư tài chính, tức là một
+# khái niệm khác hẳn doanh thu của một doanh nghiệp sản xuất. Xếp chung một cột mà không
+# ghi nhãn thì mọi bảng xếp hạng đều so sai, và không có gì báo lỗi cả.
+#
+# So khớp theo tiền tố để bắt được cả các biến thể cách viết.
+_REVENUE_BASIS: List[tuple] = [
+    ("total operating income",
+     "Tổng thu nhập hoạt động (báo cáo ngân hàng)"),
+    ("net sales from insurance business",
+     "Doanh thu thuần hoạt động kinh doanh bảo hiểm — KHÔNG gồm thu nhập đầu tư tài chính"),
+    ("net operating profit before allowance for credit loss",
+     "Lợi nhuận thuần từ hoạt động kinh doanh trước dự phòng rủi ro tín dụng (báo cáo ngân hàng)"),
+]
+
+
+def _revenue_basis(title: str) -> Optional[str]:
+    """Lời giải thích đi kèm, nếu dòng doanh thu không phải doanh thu bán hàng thông thường."""
+    low = (title or "").strip().lower()
+    for prefix, note in _REVENUE_BASIS:
+        if low.startswith(prefix):
+            return note
+    return None
 
 # Tên chỉ tiêu PHẢI trùng khóa trong METRIC_LABELS của module XBRL. Đặt tên khác đi thì
 # số vẫn vào Neo4j nhưng công cụ của agent không tìm thấy — dữ liệu nằm đó mà vô hình.
@@ -131,6 +166,50 @@ def _get(url: str, params: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     return payload.get("data") or {}
 
 
+# Sàn giao dịch được coi là "niêm yết".
+#
+# Đo trên toàn bộ danh sách VCI trả về (1.905 mã):
+#     UPCOM 855 · HSX 430 · OTC 313 · HNX 301 · OTHER 2 · STOP 2 · (trống) 2
+#
+# Giữ ba sàn có giao dịch tập trung. Bỏ OTC vì đó là cổ phiếu chưa niêm yết, mua bán thỏa
+# thuận, không có nghĩa vụ công bố thông tin định kỳ — số liệu có thì cũ và không ai soát.
+# Bỏ STOP (đã ngừng giao dịch) và OTHER vì cùng lý do: đưa vào chỉ làm loãng vũ trụ tra
+# cứu và tăng khả năng va chạm tên với doanh nghiệp Mỹ, mà không thêm câu trả lời nào.
+LISTED_EXCHANGES = ("HSX", "HNX", "UPCOM")
+
+
+def fetch_universe(exchanges: tuple = LISTED_EXCHANGES) -> List[Dict[str, Any]]:
+    """Toàn bộ doanh nghiệp VCI theo dõi. MỘT lần gọi API cho cả sàn.
+
+    Đây là thứ tương đương `company_tickers.json` của SEC, và là lý do có thể mở rộng từ
+    30 mã lên gần 1.600 mà không phải viết tay danh sách nào.
+
+    Trả về sẵn `organNameEn` — đã đối chiếu với `enOrganName` của endpoint từng mã trên 6
+    doanh nghiệp thuộc 5 ngành, KHỚP TUYỆT ĐỐI. Nhờ vậy `fetch_year_rows` nhận tên truyền
+    sẵn và bỏ được một lần gọi API cho mỗi mã — bớt gần 1.600 lượt gọi mỗi lần nạp lại.
+    """
+    data = _get(_BASE)
+    rows = data if isinstance(data, list) else (data.get("items") or [])
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        ticker = (row.get("ticker") or "").strip().upper()
+        exchange = (row.get("exchange") or "").strip().upper()
+        if not ticker or exchange not in exchanges:
+            continue
+        out.append({
+            "symbol": ticker,
+            # Ưu tiên tên tiếng Anh: bộ phân giải tên và model nhúng đều làm việc trên
+            # tiếng Anh, còn tên tiếng Việt có dấu sẽ không khớp khi người dùng gõ không dấu.
+            "name": (row.get("organNameEn") or row.get("organNameVi") or ticker).strip(),
+            "name_vi": (row.get("organNameVi") or "").strip(),
+            "exchange": exchange,
+            "sector": (row.get("sectorNameLv1CustomEn") or "").strip(),
+            "market_cap": row.get("marketCap"),
+        })
+    return out
+
+
 def fetch_field_map(symbol: str) -> Dict[str, Dict[str, str]]:
     """Bảng tra: mã trường -> tiêu đề, cho từng loại báo cáo."""
     data = _get(f"{_BASE}/{symbol}/financial-statement/metrics")
@@ -171,7 +250,7 @@ def _resolve_fields(field_titles: Dict[str, str], wanted: Dict[str, List[str]]) 
     return chosen
 
 
-def fetch_year_rows(symbol: str) -> List[Dict[str, Any]]:
+def fetch_year_rows(symbol: str, company_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """Một dòng cho mỗi năm tài chính, cùng dạng với `facts_to_year_rows` của SEC.
 
     Nhờ trùng dạng, phần nạp vào Neo4j và toàn bộ công cụ của agent dùng lại được nguyên
@@ -187,15 +266,16 @@ def fetch_year_rows(symbol: str) -> List[Dict[str, Any]]:
     )
 
     by_year: Dict[int, Dict[str, Any]] = {}
-    company_name = fetch_company_name(symbol)
+    # Tên truyền sẵn thì khỏi gọi lại. Endpoint vũ trụ (`fetch_universe`) đã trả về đúng
+    # chuỗi mà `/company/{mã}` trả về — đã đối chiếu trên 6 mã thuộc 5 ngành, khớp tuyệt
+    # đối. Bỏ được lần gọi này nghĩa là bớt 1.905 lượt khi nạp toàn sàn.
+    company_name = company_name or fetch_company_name(symbol)
 
-    # Doanh thu lấy từ "Tổng thu nhập hoạt động" nghĩa là đây là báo cáo ngân hàng.
+    # Dòng doanh thu có phải "doanh thu bán hàng" thông thường không? Nếu không thì ghi
+    # nhãn để không ai đem so với doanh nghiệp sản xuất mà tưởng cùng khái niệm.
     income_titles = field_map.get("INCOME_STATEMENT", {})
     revenue_field = sections[0][1].get("revenue")
-    is_bank = bool(
-        revenue_field
-        and income_titles.get(revenue_field, "").lower() == _BANK_REVENUE_TITLE
-    )
+    basis = _revenue_basis(income_titles.get(revenue_field, "")) if revenue_field else None
 
     for section, fields in sections:
         data = _get(f"{_BASE}/{symbol}/financial-statement", {"section": section})
@@ -229,8 +309,8 @@ def fetch_year_rows(symbol: str) -> List[Dict[str, Any]]:
     for row in rows:
         if company_name:
             row["company"] = str(company_name).strip()
-        if is_bank:
-            row["revenue_basis"] = "Tổng thu nhập hoạt động (báo cáo ngân hàng)"
+        if basis:
+            row["revenue_basis"] = basis
 
     # Suy ra lợi nhuận gộp khi VCI không khai riêng — chỉ khi có đủ hai vế.
     for row in rows:
@@ -238,6 +318,102 @@ def fetch_year_rows(symbol: str) -> List[Dict[str, Any]]:
             row["gross_profit"] = row["revenue"] - row["cost_of_revenue"]
             row["derived"].append("gross_profit")
     return rows
+
+
+def fetch_shareholders(symbol: str, min_percent: float = 0.005) -> List[Dict[str, Any]]:
+    """Danh sách cổ đông của một mã, đã lọc và chuẩn hóa.
+
+    ĐÂY LÀ TẦNG ĐỒ THỊ CHO VIỆT NAM, VÀ NÓ KHÔNG TỐN MỘT LẦN GỌI LLM NÀO.
+
+    Đồ thị phía Mỹ dựng bằng cách cho mô hình đọc từng đoạn 10-K rồi trích quan hệ — đắt,
+    chậm, và luôn có tỷ lệ sai. Phía Việt Nam thì không có văn bản để đọc, nhưng lại có
+    thứ phía Mỹ không cho sẵn: bảng cổ đông đã có cấu trúc. Đo trên rổ VN30: 1.391 bản ghi,
+    1.119 chủ sở hữu riêng biệt, và 85 chủ sở hữu nắm từ hai doanh nghiệp trở lên — tức là
+    có đường đi bắc cầu thật giữa các doanh nghiệp Việt Nam.
+
+    ⚠️ QUAN HỆ SỞ HỮU KHÔNG PHẢI QUAN HỆ KINH DOANH.
+
+    Một quỹ ETF nắm cả FPT lẫn VNM không có nghĩa hai doanh nghiệp đó làm ăn với nhau —
+    đó chỉ là danh mục đầu tư. Vì vậy cạnh sinh ra ở đây mang loại riêng `OWNED_BY`, tách
+    hẳn khỏi `PARTNERS_WITH` hay `SUPPLIED_BY`, và tuyệt đối không được để agent suy ra
+    quan hệ kinh doanh từ việc hai bên chung cổ đông. Nhóm thật sự có ý nghĩa phân tích là
+    cổ đông nhà nước (SCIC), cổ đông chiến lược là doanh nghiệp, và người sáng lập.
+
+    `min_percent` mặc định 0,5%: dưới ngưỡng đó phần lớn là nhà đầu tư nhỏ lẻ được công bố
+    lẻ tẻ, thêm vào chỉ làm đồ thị nặng mà không mở ra đường đi nào.
+    """
+    symbol = symbol.strip().upper()
+    data = _get(f"{_BASE}/{symbol}/shareholder")
+    rows = data if isinstance(data, list) else (data.get("items") or [])
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        # Ưu tiên tên tiếng Anh cho khớp với phần còn lại của đồ thị; tên tiếng Việt có
+        # dấu sẽ không gộp được với node do bên Mỹ sinh ra ("Norges Bank" chẳng hạn).
+        name = (row.get("ownerNameEn") or row.get("ownerName") or "").strip()
+        pct = row.get("percentage")
+        if not name or pct is None:
+            continue
+        try:
+            pct = float(pct)
+        except (TypeError, ValueError):
+            continue
+        if pct < min_percent:
+            continue
+
+        kind = (row.get("ownerType") or "").strip().upper()
+        is_person = kind == "INDIVIDUAL"
+
+        # ⚠️ CÁ NHÂN PHẢI ĐƯỢC GIỚI HẠN TRONG TỪNG DOANH NGHIỆP, TỔ CHỨC THÌ KHÔNG.
+        #
+        # Nguồn không cấp mã định danh cho chủ sở hữu, nên node phải gộp theo TÊN. Với tổ
+        # chức thì ổn — tên riêng và dài ("Norges Bank", "PYN Elite Fund", "Tổng Công ty
+        # Đầu tư và Kinh doanh vốn Nhà nước"). Với cá nhân thì hỏng nặng.
+        #
+        # Đo trên 10.772 bản ghi cổ đông thật của 1.522 doanh nghiệp:
+        #
+        #     bắc cầu ≥2 doanh nghiệp   tổ chức 515   cá nhân 771
+        #     GHÉP NHẦM chứng minh được tổ chức   2   cá nhân 121
+        #
+        # "Ghép nhầm chứng minh được" = cùng một tên tiếng Anh nhưng ứng với nhiều tên
+        # tiếng Việt khác nhau, tức chắc chắn là những người khác nhau:
+        #
+        #     Nguyen Van Thanh  ->  Nguyễn Văn Thành / Nguyễn Văn Thạnh / Nguyễn Văn Thanh
+        #     Nguyen Thi Thuy   ->  Nguyễn Thị Thuỷ / Nguyễn Thị Thùy / Nguyễn Thị Thủy
+        #
+        # Và 121 mới chỉ là CẬN DƯỚI: hai người trùng cả cách viết tiếng Việt thì không có
+        # cách nào phát hiện. "Nguyen Van Thanh" đang đứng tên ở 12 doanh nghiệp.
+        #
+        # Nạp nguyên như vậy thì đồ thị sẽ khẳng định "FPT liên quan tới VNM qua ông Nguyễn
+        # Văn Thành" — một đường đi nghe rất thuyết phục và hoàn toàn bịa. Đúng loại lỗi
+        # "khớp sai một cách im lặng" mà `resolve_company` được viết ra để chặn.
+        #
+        # Nên tên hiển thị của cá nhân được gắn kèm mã doanh nghiệp. Cái giá phải trả là
+        # mất vài cầu nối CÓ THẬT (ông Nguyễn Duy Hưng đúng là chủ tịch cả SSI lẫn PAN),
+        # nhưng đổi lại tránh được 770 cầu nối BỊA. Đánh đổi đó không cần cân nhắc lâu.
+        display = f"{name} ({symbol})" if is_person else name
+
+        out.append({
+            "ticker": f"{symbol}.VN",
+            "symbol": symbol,
+            "owner": display,
+            "owner_raw": name,
+            "owner_vi": (row.get("ownerName") or "").strip(),
+            # Cố ý KHÔNG dùng nhãn Company cho bên nắm giữ: phần lớn là quỹ đầu tư và cá
+            # nhân, không niêm yết và không có số liệu. Gộp chúng vào Company sẽ thổi phồng
+            # đúng con số "doanh nghiệp" mà trang chủ vừa phải sửa cho khỏi đếm nhầm.
+            "owner_label": "Person" if is_person else "Organization",
+            "owner_kind": kind or "UNKNOWN",
+            "percent": pct,
+            "shares": row.get("quantity"),
+            "position": (row.get("positionNameEn") or row.get("positionName") or "").strip(),
+            # Ngày công bố = bằng chứng thời điểm. Tỷ lệ sở hữu thay đổi liên tục, nên một
+            # con số không kèm ngày là con số không kiểm chứng được.
+            "as_of": (row.get("publicDate") or row.get("updateDate") or "").strip(),
+        })
+
+    out.sort(key=lambda r: -r["percent"])
+    return out
 
 
 def fetch_company_name(symbol: str) -> str:

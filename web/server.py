@@ -121,7 +121,20 @@ def collect_stats() -> Dict[str, Any]:
     # HAS_FINANCIALS và FILED là cạnh hạ tầng (nối công ty với bản ghi năm / hồ sơ), không
     # phải tri thức trích xuất được. Gộp chúng vào sẽ thổi phồng con số lên hàng chục lần.
     infra = ("HAS_FINANCIALS", "FILED")
-    knowledge_edges = sum(n for t, n in rels.items() if t not in infra)
+
+    # ⚠️ HAI LOẠI CẠNH NÀY KHÔNG ĐƯỢC CỘNG CHUNG.
+    #
+    # `knowledge_edges` là quan hệ mô hình ĐỌC RA từ hồ sơ 10-K — mỗi cạnh tốn một lần gọi
+    # LLM và có tỷ lệ sai. `ownership_edges` là quan hệ sở hữu lấy từ dữ liệu đã có cấu
+    # trúc của VCI — không tốn lần gọi nào và không có chỗ để sai.
+    #
+    # Cộng chung thì con số nhảy từ 2.153 lên gần 19.000 và trang chủ sẽ ngầm khoe rằng
+    # đồ thị trích xuất được lớn gấp chín lần thực tế. Đó đúng là kiểu đếm gộp mà
+    # `companies` vừa phải tách ra để sửa.
+    ownership_edges = rels.get("OWNED_BY", 0)
+    knowledge_edges = sum(
+        n for t, n in rels.items() if t not in infra and t != "OWNED_BY"
+    )
 
     # ⚠️ TỔNG SỐ NODE Company KHÔNG PHẢI LÀ "SỐ DOANH NGHIỆP NIÊM YẾT TẠI MỸ".
     #
@@ -136,6 +149,29 @@ def collect_stats() -> Dict[str, Any]:
     us = store.run("MATCH (c:Company) WHERE c.cik IS NOT NULL RETURN count(*) AS n")
     vn = store.run("MATCH (c:Company) WHERE c.market = 'VN' RETURN count(*) AS n")
 
+    # ⚠️ "CÓ ĐỒ THỊ" GIỜ CÓ HAI NGHĨA KHÁC HẲN NHAU, VÀ MỘT CON SỐ KHÔNG NÓI ĐƯỢC CẢ HAI.
+    #
+    #   từ hồ sơ    mô hình đọc 10-K rồi trích quan hệ — cạnh thưa nhưng giàu ngữ nghĩa
+    #               (cạnh tranh với ai, phụ thuộc nhà cung cấp nào, chịu rủi ro gì)
+    #   từ sở hữu   bảng cổ đông VCI — cạnh dày nhưng chỉ nói đúng một điều: ai nắm bao
+    #               nhiêu phần trăm của ai
+    #
+    # Sau khi nạp cổ đông, `tiers.graph` nhảy từ 95 lên 1.619. In thẳng con số đó kèm chữ
+    # "doanh nghiệp có đồ thị" là ngầm khoe rằng đồ thị trích xuất từ hồ sơ đã lớn gấp 17
+    # lần, trong khi nó vẫn đúng 95. Cùng loại đếm gộp mà `companies` phải tách ra.
+    from_filings = store.run(
+        """
+        MATCH (c:Company) WHERE c.ticker IS NOT NULL
+        OPTIONAL MATCH (c)-[r]-() WHERE NOT type(r) IN $infra AND type(r) <> 'OWNED_BY'
+        WITH c, count(r) AS n WHERE n > 0
+        RETURN count(c) AS n
+        """,
+        infra=list(infra),
+    )
+    from_ownership = store.run(
+        "MATCH (c:Company)-[:OWNED_BY]-() RETURN count(DISTINCT c) AS n"
+    )
+
     data = {
         "companies": nodes.get("Company", 0),
         "companies_us": us[0]["n"] if us else 0,
@@ -147,11 +183,15 @@ def collect_stats() -> Dict[str, Any]:
         "financial_years": nodes.get("FinancialYear", 0),
         "text_chunks": backend()["vectors"].count(),
         "knowledge_edges": knowledge_edges,
-        "relation_types": len([t for t in rels if t not in infra]),
+        "ownership_edges": ownership_edges,
+        "relation_types": len([t for t in rels if t not in infra and t != "OWNED_BY"]),
         "tiers": {
             "metrics": tiers.get("metrics", 0),
             "text": tiers.get("text", 0),
             "graph": tiers.get("graph", 0),
+            # Hai nguồn đồ thị, đếm riêng — xem chú thích ở trên
+            "graph_from_filings": from_filings[0]["n"] if from_filings else 0,
+            "graph_from_ownership": from_ownership[0]["n"] if from_ownership else 0,
         },
         "model": settings.llm_reasoning_model,
     }
