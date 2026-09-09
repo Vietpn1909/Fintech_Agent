@@ -65,8 +65,18 @@ TOOL_SPECS = {
         "args": {"companies": "list[str]", "metric": "str", "year": "int optional"},
     },
     "screen_companies": {
-        "desc": "Filter all ~6000 listed companies by numeric criteria. Use for 'which companies have revenue over X'.",
-        "args": {"filters": "list of {metric, op(gt/gte/lt/lte/eq), value}", "fiscal_year": "int", "order_by": "str"},
+        # ⚠️ `currency` PHẢI có mặt ở đây. Thiếu nó, agent không có cách nào chạm tới
+        # 1.532 doanh nghiệp Việt Nam: mặc định của công cụ là USD, nên câu hỏi "doanh
+        # nghiệp Việt Nam nào doanh thu lớn nhất" trả về toàn Walmart/Amazon rồi agent
+        # kết luận thật thà rằng "không tìm thấy doanh nghiệp Việt Nam nào".
+        # Đo thật trước khi thêm: agent gọi không kèm currency, ra 0 doanh nghiệp VN.
+        "desc": ("Filter every listed company by numeric criteria. Use for "
+                 "'which companies have revenue over X'. Companies are grouped by "
+                 "reporting currency and ONLY ONE currency is ranked at a time — pass "
+                 "currency='VND' for Vietnamese companies, 'USD' (default) for US ones."),
+        "args": {"filters": "list of {metric, op(gt/gte/lt/lte/eq), value}",
+                 "fiscal_year": "int", "order_by": "str",
+                 "currency": "str optional — 'USD' (default) or 'VND' for Vietnam"},
     },
     "search_filings": {
         "desc": "Semantic search over 10-K text. Use for qualitative questions: strategy, risks, competition, what management said.",
@@ -77,11 +87,18 @@ TOOL_SPECS = {
         },
     },
     "graph_neighbors": {
-        "desc": "Entities directly connected to one entity in the knowledge graph (competitors, suppliers, segments).",
+        # OWNED_BY phai duoc noi ro o day. Truoc khi them, mo ta chi liet ke
+        # "competitors, suppliers, segments" nen agent khong biet 10.701 canh so huu ton
+        # tai, va cung khong biet chung mang y nghia KHAC han cac canh con lai.
+        "desc": ("Entities directly connected to one entity: competitors, suppliers, "
+                 "segments, and OWNED_BY (who holds shares in a Vietnamese company). "
+                 "OWNED_BY is share ownership, NOT a business relationship."),
         "args": {"entity": "str", "relations": "list[str] optional"},
     },
     "graph_path": {
-        "desc": "Find the chain of connections between TWO entities. Use for 'how is A related to B' questions.",
+        "desc": ("Find the chain of connections between TWO entities. Use for 'how is A "
+                 "related to B'. Beware: a path made only of OWNED_BY edges means the two "
+                 "companies share an investor, NOT that they do business together."),
         "args": {"source": "str", "target": "str"},
     },
     "company_coverage": {
@@ -140,6 +157,10 @@ Routing rules:
 - Question mentions a specific number, figure, revenue, profit, growth  -> lookup_financials
 - Question compares named companies                                     -> compare_financials
 - Question asks "which companies..." with numeric criteria              -> screen_companies
+- Question is about VIETNAMESE companies (Việt Nam, VN30, HOSE, HNX, UPCOM, or a
+  Vietnamese company name) and asks "which companies"                   -> screen_companies
+  with currency='VND'. Vietnamese figures are in dong, and the tool ranks ONE currency
+  at a time — without currency='VND' the result contains no Vietnamese company at all.
 - Question about strategy, risk, competition, management commentary     -> search_filings
 - Question asks how two things are connected, or asks about supply chain
   / competitors / partners as a network                                 -> graph_path or graph_neighbors
@@ -187,6 +208,12 @@ Quy tắc bắt buộc:
    cáo bằng tiền bản địa: Toyota bằng JPY, ASML bằng EUR, TSMC bằng TWD. Nếu công cụ trả
    về `mixed_currency_warning`, PHẢI nhắc lại cảnh báo đó và TUYỆT ĐỐI không xếp hạng hay
    so sánh trực tiếp các con số khác đồng tiền — hệ thống không có tỷ giá để quy đổi.
+4c. QUAN HỆ SỞ HỮU KHÔNG PHẢI QUAN HỆ KINH DOANH. Cạnh `OWNED_BY` chỉ nói ai nắm bao
+   nhiêu phần trăm cổ phần của ai. Nếu đường đi giữa hai doanh nghiệp CHỈ gồm các cạnh
+   `OWNED_BY`, điều đó có nghĩa hai bên CHUNG MỘT NHÀ ĐẦU TƯ (thường là quỹ ETF nắm cả
+   hai trong danh mục) — TUYỆT ĐỐI không được diễn giải thành hợp tác, cung ứng, cạnh
+   tranh hay bất kỳ quan hệ làm ăn nào. Phải nói rõ đó là quan hệ sở hữu, kèm tỷ lệ và
+   ngày công bố nếu có.
 5. Nếu hệ thống vừa tự đi lấy dữ liệu (trường just_ingested), hãy nói với người dùng.
 6. Không đưa ra khuyến nghị mua/bán. Chỉ trình bày dữ kiện và phân tích.
 

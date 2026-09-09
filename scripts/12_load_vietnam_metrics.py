@@ -209,6 +209,9 @@ def main() -> None:
             # tình cờ đúng; ở mức 1.586 mã thì 855 mã UPCOM và 301 mã HNX sẽ bị ghi sai.
             "exchange": by_symbol.get(s, {}).get("exchange") or "HOSE",
             "sector": by_symbol.get(s, {}).get("sector") or None,
+            "short_en": by_symbol.get(s, {}).get("short_en") or None,
+            "name_vi": by_symbol.get(s, {}).get("name_vi") or None,
+            "short_vi": by_symbol.get(s, {}).get("short_vi") or None,
         }
         for s in got
     ]

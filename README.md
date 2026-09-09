@@ -38,9 +38,12 @@ SEC không chỉ có doanh nghiệp Mỹ. Mọi tập đoàn lớn ngoài Mỹ c
 sơ: **TSMC, Toyota, SAP, Alibaba, Shell, Novo Nordisk, ASML, Sony, Unilever, BHP, HSBC,
 AstraZeneca, TotalEnergies, Infosys...** — đều tra được.
 
-Nằm ngoài tầm với: doanh nghiệp **không niêm yết tại Mỹ** (Vingroup, Bosch, Huawei,
-phần lớn doanh nghiệp Việt Nam). Đó là giới hạn của nguồn dữ liệu, không phải của code —
-muốn phủ thì phải thêm nguồn khác (HNX/HOSE, Companies House...).
+Nằm ngoài tầm với: doanh nghiệp **không niêm yết trên sàn nào trong hai vũ trụ này**
+(Bosch, Huawei, các tập đoàn tư nhân). Đó là giới hạn của nguồn dữ liệu, không phải của
+code — muốn phủ thì phải thêm nguồn khác (Companies House, EDINET...).
+
+Doanh nghiệp Việt Nam **đã nằm trong tầm với**: 1.532 mã niêm yết trên HSX/HNX/UPCOM, lấy
+số từ VCI. Xem mục *Mở rộng sang doanh nghiệp Việt Nam* bên dưới.
 
 ## Chọn lọc chunk trước khi gọi LLM — tối ưu quan trọng nhất của tầng đồ thị
 
@@ -157,7 +160,8 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/11_merge_graph_entities.py --apply       # gộp vào bản ghi SEC
 
 # --- Tầng số liệu Việt Nam (không cần LM Studio) ---
-.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --apply
+.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --resume --apply      # 1.532 mã · ~37 phút
+.venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py --resume --apply # cổ đông · ~9 phút
 
 # --- Đánh giá ---
 .venv/Scripts/python.exe scripts/07_build_testset.py                 # sinh 34 câu hỏi
@@ -263,9 +267,9 @@ máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của
 |---|---|---|
 | Tải dữ liệu SEC | ✅ | 8 bản 10-K + bulk XBRL 1,41GB (20.303 doanh nghiệp) |
 | Bóc tách theo Item | ✅ | 2,25 triệu ký tự sạch, 8/8 bản khai đúng |
-| Trích xuất XBRL | ✅ | **38.887 bản ghi năm · 4.295 doanh nghiệp có số liệu** |
-| Đồ thị nền | ✅ | **6.074 Company · 38.887 FinancialYear** |
-| Vector index | ✅ | **22.389 chunk · 42 doanh nghiệp** + nạp theo yêu cầu (36–45 giây/công ty) |
+| Trích xuất XBRL | ✅ | **48.025 bản ghi năm · 4.295 doanh nghiệp Mỹ có số liệu** |
+| Đồ thị nền | ✅ | **7.772 Company · 59.802 FinancialYear** (6.074 Mỹ + 1.532 Việt Nam) |
+| Vector index | ✅ | **23.869 chunk · 47 doanh nghiệp** + nạp theo yêu cầu (36–45 giây/công ty) |
 | Phân giải tên công ty | ✅ | Khớp theo ranh giới từ, neo vào CIK, chịu được gõ sai |
 | Bộ công cụ agent | ✅ | 7 công cụ, kiểm thử trên dữ liệu thật, không gọi LLM |
 | Sơ đồ trạng thái LangGraph | ✅ | Biên dịch chạy được, có vòng lặp suy xét |
@@ -432,8 +436,8 @@ luận chúng không có quan hệ nào trong đồ thị.
 
 Hai nguyên nhân chồng lên nhau:
 
-- Truy vấn khớp **mọi** loại cạnh, kể cả 48.025 cạnh `HAS_FINANCIALS` — nhiều gấp 25 lần
-  toàn bộ tri thức thật cộng lại.
+- Truy vấn khớp **mọi** loại cạnh, kể cả 59.802 cạnh `HAS_FINANCIALS` — nhiều gấp 28 lần
+  toàn bộ tri thức trích từ hồ sơ cộng lại.
 - `ORDER BY r.confidence DESC` — trong Neo4j, `NULL` được xếp **lên đầu** khi sắp giảm
   dần, mà cạnh hạ tầng thì không có thuộc tính `confidence`. Chúng chiếm sạch 12 chỗ.
 
@@ -487,8 +491,16 @@ Cách sửa: đưa mười cặp tên-SEC ↔ tên-đã-gộp vào bảng alias,
 
 Giới hạn lớn nhất từng ghi trong tài liệu này là *"không có doanh nghiệp Việt Nam nào
 ngoài VinFast"*. Đó là giới hạn của **nguồn dữ liệu**, không phải của kiến trúc — và
-`src/ingest/vietnam.py` chứng minh điều đó: **30 doanh nghiệp VN30 · 240 bản ghi năm ·
-2018–2025**, dùng lại nguyên vẹn lược đồ Neo4j và bộ công cụ của agent.
+`src/ingest/vietnam.py` chứng minh điều đó: **1.532 doanh nghiệp niêm yết · 11.777 bản
+ghi năm · 2018–2025**, dùng lại nguyên vẹn lược đồ Neo4j và bộ công cụ của agent.
+
+Con số 30 trong bản đầu là giới hạn của một **danh sách VN30 viết tay**, không phải của
+nguồn: VCI có endpoint trả về toàn bộ vũ trụ trong một lần gọi. Bỏ danh sách đó đi thì độ
+phủ nhân lên 51 lần mà không phải sửa dòng nào trong agent.
+
+Kèm theo là **10.701 cạnh sở hữu** (`OWNED_BY`) lấy từ bảng cổ đông — tầng đồ thị cho Việt
+Nam, dựng xong trong 9 phút và **không tốn một lần gọi LLM nào**. Chi tiết và bốn lỗi âm
+thầm phát hiện trong lúc làm nằm ở `docs/nguon_du_lieu_viet_nam.md`.
 
 ```
 FPT   FPT Corporation                      70,1 nghìn tỷ VND (2025)
@@ -552,8 +564,12 @@ hiểu tiếng Anh — muốn tìm theo ý nghĩa trên tiếng Việt phải đ
 chiều thay vì 384), tức là nhúng lại toàn bộ 23.869 đoạn vào một collection khác.
 
 ```bash
-.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py            # chạy thử
-.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --apply    # ghi thật
+.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py                  # chạy thử
+.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --resume --apply # ghi thật
+
+# Tầng đồ thị cho Việt Nam: quan hệ sở hữu, 0 lần gọi LLM
+.venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py                  # chạy thử
+.venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py --resume --apply # ghi thật
 .venv/Scripts/python.exe tests/test_vietnam.py                         # 23 ca kiểm thử
 ```
 

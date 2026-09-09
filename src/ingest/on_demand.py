@@ -23,6 +23,7 @@ BA MỨC PHỦ
 from __future__ import annotations
 
 import re
+import unicodedata
 import time
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
@@ -43,8 +44,29 @@ _SUFFIX = re.compile(
 )
 
 
+def _fold(text: str) -> str:
+    """Bỏ dấu tiếng Việt, giữ nguyên chữ cái gốc.
+
+    ⚠️ KHÔNG BỎ BƯỚC NÀY RỒI XÓA THẲNG KÝ TỰ NGOÀI a-z.
+
+    `_simplify` trước đây thay mọi ký tự không phải a-z bằng dấu cách, nên "Hòa Phát"
+    thành 'h a ph t' — chuỗi rác không khớp được với bất cứ thứ gì, kể cả với chính
+    "Hoa Phat" không dấu. Người dùng Việt Nam gõ cả hai kiểu, và tên tiếng Việt của
+    1.532 doanh nghiệp đều có dấu, nên bỏ qua bước này là vứt bỏ toàn bộ nhánh khớp
+    theo tên tiếng Việt.
+
+    NFD tách chữ và dấu thành hai ký tự rời, rồi bỏ phần dấu. Riêng "đ" không tách được
+    bằng NFD nên phải thay tay.
+    """
+    text = (text or "").lower().replace("đ", "d")
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", text)
+        if not unicodedata.combining(ch)
+    )
+
+
 def _simplify(text: str) -> str:
-    text = _SUFFIX.sub("", (text or "").lower())
+    text = _SUFFIX.sub("", _fold(text))
     return re.sub(r"[^a-z0-9 ]", " ", text).strip()
 
 
@@ -238,13 +260,21 @@ def vn_companies() -> Dict[str, Dict[str, str]]:
             store = GraphStore()
             rows = store.run(
                 "MATCH (c:Company {market:'VN'}) "
-                "RETURN c.symbol AS symbol, c.ticker AS ticker, c.name AS name"
+                "RETURN c.symbol AS symbol, c.ticker AS ticker, c.name AS name, "
+                "       c.short_en AS short_en, c.name_vi AS name_vi, c.short_vi AS short_vi"
             )
             store.close()
             _vn_map = {
                 (r["symbol"] or "").upper(): {
                     "ticker": r["ticker"], "name": r["name"] or r["symbol"],
                     "cik": None, "market": "VN",
+                    # Bốn dạng tên VCI cấp. Tên đầy đủ tiếng Anh của Vinamilk là "Vietnam
+                    # Dairy Products Joint Stock Company" — không chứa chữ "Vinamilk" nào,
+                    # mà đó lại là cách gọi phổ biến nhất.
+                    "aliases": [
+                        x for x in (r.get("short_en"), r.get("name_vi"), r.get("short_vi"))
+                        if x
+                    ],
                 }
                 for r in rows if r.get("symbol")
             }
@@ -254,7 +284,30 @@ def vn_companies() -> Dict[str, Dict[str, str]]:
 
 
 def _resolve_vn(query: str) -> List[Dict[str, str]]:
-    """Khớp câu hỏi với doanh nghiệp Việt Nam: đúng mã, hoặc tên chứa trọn cụm từ."""
+    """Khớp câu hỏi với doanh nghiệp niêm yết tại Việt Nam.
+
+    ⚠️ LUẬT KHỚP TIỀN TỐ AN TOÀN Ở 30 MÃ, NGUY HIỂM Ở 1.532 MÃ.
+
+    Bản đầu chấp nhận mọi tên BẮT ĐẦU BẰNG cụm người dùng gõ, và ở rổ VN30 điều đó không
+    gây hại vì 30 cái tên đủ khác nhau. Sau khi mở ra toàn sàn thì nó lặp lại đúng lỗi
+    Acer→Macerich, chỉ khác vũ trụ:
+
+        hỏi "Sabeco"  ->  SABECO SONGTIEN Commerce JSC (SST.VN, một công ty UPCOM nhỏ)
+                          status: ok, confidence: high, kèm đầy đủ số liệu
+
+    Sabeco thật là SAB.VN, tên đầy đủ "Saigon Beer - Alcohol - Beverage Corporation" —
+    KHÔNG chứa chữ "Sabeco" nào, nên nó còn không lọt vào danh sách ứng viên.
+
+    Ba tầng, chặt trước lỏng sau, và tầng nào ra nhiều hơn một kết quả thì trả về HẾT để
+    `resolve_company` báo nhập nhằng chứ không tự chọn:
+
+      1. đúng mã chứng khoán                      SAB, SAB.VN
+      2. khớp CHÍNH XÁC một trong bốn dạng tên     "Sabeco" == short_en "SABECO"
+      3. tên đầy đủ bắt đầu bằng cụm đã gõ         "Hoa Phat" -> "Hoa Phat Group JSC"
+
+    Tầng 2 mới là tầng cứu được ca Sabeco: VCI có sẵn `organShortNameEn` = "SABECO" cho
+    SAB, nên khớp chính xác ở tầng này thắng trước khi kịp rơi xuống tầng tiền tố.
+    """
     table = vn_companies()
     if not table:
         return []
@@ -272,12 +325,29 @@ def _resolve_vn(query: str) -> List[Dict[str, str]]:
     simple = _simplify(raw)
     if len(simple) < 4:
         return []
-    hits = []
-    for symbol, info in table.items():
-        name_simple = _simplify(info["name"])
-        if name_simple and (name_simple == simple or name_simple.startswith(simple + " ")):
-            hits.append({**info, "match": "exact", "confidence": "high"})
-    return hits
+
+    # --- Tầng 2: khớp chính xác một trong các dạng tên ---
+    exact = [
+        {**info, "match": "exact", "confidence": "high"}
+        for info in table.values()
+        if any(
+            _simplify(name) == simple
+            for name in [info["name"], *info.get("aliases", [])]
+        )
+    ]
+    if exact:
+        return exact
+
+    # --- Tầng 3: tên đầy đủ bắt đầu bằng cụm đã gõ ---
+    #
+    # Giữ lại vì nó bắt được "Hoa Phat" -> "Hoa Phat Group Joint Stock Company", kiểu gõ
+    # rất phổ biến. Nhưng hạ nhãn xuống `prefix` và nếu ra nhiều hơn một thì `resolve_company`
+    # sẽ báo nhập nhằng — không được tự chọn như trước.
+    return [
+        {**info, "match": "prefix", "confidence": "high"}
+        for info in table.values()
+        if _simplify(info["name"]).startswith(simple + " ")
+    ]
 
 
 def _suggest(query: str, k: int = 3) -> List[Dict[str, str]]:
@@ -389,7 +459,22 @@ def resolve_company(query: str, limit: int = 5) -> Dict[str, Any]:
         }
 
     if vn and not strong:
-        return {"status": "ok", "best": vn[0], "alternatives": vn[1:limit]}
+        # ⚠️ NHIỀU DOANH NGHIỆP VIỆT NAM CÙNG KHỚP -> BÁO NHẬP NHẰNG, KHÔNG TỰ CHỌN.
+        #
+        # Trước đây hàm này lấy thẳng vn[0]. Ở rổ 30 mã thì hiếm khi có hai kết quả nên
+        # không lộ; ở 1.532 mã thì đó chính là đường quay lại lỗi "trả về số của doanh
+        # nghiệp khác mà không báo gì". 16/1.532 tên là tiền tố của một tên khác, chưa kể
+        # các cụm chung như "Vietnam" hay "Sai Gon" khớp hàng chục doanh nghiệp.
+        if len(vn) > 1:
+            names = ", ".join(o["name"] for o in vn[:4])
+            return {
+                "status": "ambiguous", "query": query, "options": vn[:limit],
+                "hint": (f"'{query}' khớp với {len(vn)} doanh nghiệp Việt Nam: {names}"
+                         + ("…" if len(vn) > 4 else "")
+                         + ". Hãy hỏi lại người dùng, hoặc gọi lại bằng mã chứng khoán "
+                           "cụ thể (ví dụ 'SAB.VN')."),
+            }
+        return {"status": "ok", "best": vn[0], "alternatives": []}
 
     if not strong:
         # Ứng viên yếu vẫn trả về, nhưng dán nhãn rõ là gợi ý — để agent có thể hỏi lại

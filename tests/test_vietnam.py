@@ -68,6 +68,35 @@ def main() -> int:
 
     print()
     print("=" * 78)
+    print("NHÓM 1b — TÊN THƯƠNG HIỆU và tên có dấu, thứ người dùng thật sự gõ")
+    print("=" * 78)
+    # Tên đầy đủ của Vinamilk là "Vietnam Dairy Products Joint Stock Company" — không
+    # chứa chữ "Vinamilk" nào. Trước khi lưu thêm các dạng tên ngắn, cả bốn ca đầu đều
+    # trả về not_found, còn "Sabeco" thì tệ hơn: nó khớp tiền tố với SABECO SONGTIEN
+    # (SST.VN, một công ty UPCOM nhỏ) và trả về status ok kèm số liệu của doanh nghiệp
+    # hoàn toàn khác — đúng lỗi Acer→Macerich, tái sinh trong vũ trụ Việt Nam.
+    BRANDS = [
+        ("Vinamilk", "VNM.VN"),
+        ("Vietcombank", "VCB.VN"),
+        ("Techcombank", "TCB.VN"),
+        ("Sabeco", "SAB.VN"),
+        ("VPBank", "VPB.VN"),
+        # Có dấu: `_simplify` cũ biến "Hòa Phát" thành 'h a ph t', một chuỗi rác
+        ("Hòa Phát", "HPG.VN"),
+        ("Thế giới di động", "MWG.VN"),
+        ("Tập đoàn Masan", "MSN.VN"),
+    ]
+    for query, want in BRANDS:
+        result = resolve_company(query)
+        got = result.get("best", {}).get("ticker") if result["status"] == "ok" else None
+        if got == want:
+            print(f"  đúng  {query:<18} -> {want}")
+        else:
+            failures.append(f"{query!r} lẽ ra là {want}, nhận được {got} ({result['status']})")
+            print(f"  SAI   {query:<18} -> {result['status']} {got}")
+
+    print()
+    print("=" * 78)
     print("NHÓM 2 — mã trùng hai sàn, phải BÁO NHẬP NHẰNG chứ không tự chọn")
     print("=" * 78)
     for symbol, why in MUST_BE_AMBIGUOUS:
@@ -136,7 +165,7 @@ def main() -> int:
 
     print()
     print("=" * 78)
-    total = len(MUST_RESOLVE_VN) + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1
+    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for item in failures:

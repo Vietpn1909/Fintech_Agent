@@ -202,7 +202,15 @@ def fetch_universe(exchanges: tuple = LISTED_EXCHANGES) -> List[Dict[str, Any]]:
             # Ưu tiên tên tiếng Anh: bộ phân giải tên và model nhúng đều làm việc trên
             # tiếng Anh, còn tên tiếng Việt có dấu sẽ không khớp khi người dùng gõ không dấu.
             "name": (row.get("organNameEn") or row.get("organNameVi") or ticker).strip(),
+            # ⚠️ TÊN NGẮN LÀ CÁI NGƯỜI DÙNG THỰC SỰ GÕ.
+            #
+            # Tên đầy đủ của Vinamilk là "Vietnam Dairy Products Joint Stock Company" —
+            # không chứa chữ "Vinamilk" nào. Chỉ lưu tên đầy đủ thì người Việt gõ
+            # "Vinamilk", "Vietcombank", "Techcombank" đều ra không-tìm-thấy, mà đó lại
+            # là cách gọi phổ biến nhất. VCI cấp sẵn bốn dạng tên, lưu cả bốn.
+            "short_en": (row.get("organShortNameEn") or "").strip(),
             "name_vi": (row.get("organNameVi") or "").strip(),
+            "short_vi": (row.get("organShortNameVi") or "").strip(),
             "exchange": exchange,
             "sector": (row.get("sectorNameLv1CustomEn") or "").strip(),
             "market_cap": row.get("marketCap"),

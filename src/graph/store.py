@@ -147,6 +147,11 @@ class GraphStore:
                 // Ngành do VCI phân loại. Giữ lại vì khi vũ trụ Việt Nam lên gần 1.600 mã
                 // thì "doanh nghiệp thép nào lãi nhất" mới là câu hỏi trả lời được.
                 c.sector = coalesce(row.sector, c.sector),
+                // Các dạng tên khác để bộ phân giải khớp được "Vinamilk", "Vietcombank",
+                // "Hòa Phát" — những cái tên người dùng thật sự gõ.
+                c.short_en = coalesce(row.short_en, c.short_en),
+                c.name_vi = coalesce(row.name_vi, c.name_vi),
+                c.short_vi = coalesce(row.short_vi, c.short_vi),
                 c.tier = coalesce(c.tier, 'metrics'),
                 // Khác với doanh nghiệp SEC (dùng ON CREATE SET để giữ tên đẹp đã gộp
                 // bằng tay), tên doanh nghiệp Việt Nam luôn ghi đè từ nguồn: VCI là
