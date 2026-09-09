@@ -123,8 +123,27 @@ def collect_stats() -> Dict[str, Any]:
     infra = ("HAS_FINANCIALS", "FILED")
     knowledge_edges = sum(n for t, n in rels.items() if t not in infra)
 
+    # ⚠️ TỔNG SỐ NODE Company KHÔNG PHẢI LÀ "SỐ DOANH NGHIỆP NIÊM YẾT TẠI MỸ".
+    #
+    # Nhãn Company đang gộp ba thứ khác hẳn nhau: 6.074 doanh nghiệp đăng ký với SEC (có
+    # CIK), 30 doanh nghiệp niêm yết tại Việt Nam (market='VN', lấy số từ VCI chứ không
+    # phải EDGAR), và 166 tổ chức do bước trích xuất đẻ ra vì có tên trong hồ sơ — Samsung,
+    # Huawei, OpenAI, Azure — vốn không niêm yết tại Mỹ và không có một dòng số liệu nào.
+    #
+    # Trang chủ trước đây in thẳng tổng này kèm chữ "doanh nghiệp niêm yết tại Mỹ", nên
+    # vừa cộng nhầm doanh nghiệp Việt Nam vừa cộng nhầm cả những cái tên chỉ được nhắc tới.
+    # Tách ra ở đây để câu chữ ngoài giao diện nói đúng cái mà nó đang đếm.
+    us = store.run("MATCH (c:Company) WHERE c.cik IS NOT NULL RETURN count(*) AS n")
+    vn = store.run("MATCH (c:Company) WHERE c.market = 'VN' RETURN count(*) AS n")
+
     data = {
         "companies": nodes.get("Company", 0),
+        "companies_us": us[0]["n"] if us else 0,
+        "companies_vn": vn[0]["n"] if vn else 0,
+        # Doanh nghiệp NIÊM YẾT — tức là có số liệu tài chính tra được. Cố ý không dùng
+        # "doanh nghiệp có số liệu" làm nhãn: một phần nhỏ trong vũ trụ SEC nộp hồ sơ mà
+        # không kèm XBRL nên không bóc được năm nào, gọi tên như vậy sẽ hứa hơi quá.
+        "companies_listed": (us[0]["n"] if us else 0) + (vn[0]["n"] if vn else 0),
         "financial_years": nodes.get("FinancialYear", 0),
         "text_chunks": backend()["vectors"].count(),
         "knowledge_edges": knowledge_edges,

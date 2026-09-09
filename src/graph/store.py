@@ -23,7 +23,7 @@ CẤU TRÚC ĐỒ THỊ
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from neo4j import GraphDatabase
 
@@ -177,6 +177,60 @@ class GraphStore:
             SET c.tier = $tier
             """,
             tickers=tickers, tier=tier, rank=rank,
+        )
+
+    def sync_graph_tier(self) -> Tuple[int, int]:
+        """Đặt mức phủ 'graph' theo ĐÚNG những gì đồ thị đang có. Trả về (nâng, khai khống).
+
+        ⚠️ Hàm này tồn tại vì mức 'graph' trước đây KHÔNG AI GÁN CẢ.
+
+        Script 05 ghi rõ trong chú thích rằng "script 04 nâng lên graph", nhưng script 04
+        chưa bao giờ gọi `set_tier`. Hậu quả đo được: 95 doanh nghiệp trong vũ trụ thực sự
+        có cạnh tri thức, nhưng chỉ 84 doanh nghiệp mang nhãn 'graph'. Zoom có 105 cạnh mà
+        vẫn bị xếp mức 'text' — nghĩa là agent tự báo mình KHÔNG có dữ liệu đồ thị về Zoom
+        trong khi nó có nhiều nhất. Nói thiếu về năng lực của chính mình cũng là trả lời sai,
+        đúng như cảnh báo trong `set_tier`.
+
+        Vì sao SUY RA thay vì gán tay: gán tay là thứ đã hỏng. Mức phủ phải là hệ quả của
+        dữ liệu, nên chạy lại bao nhiêu lần cũng ra cùng kết quả, và không lệ thuộc vào việc
+        có ai nhớ gọi hàm ở đúng chỗ hay không.
+
+        Chỉ xét node CÓ ticker. Bước trích xuất đẻ ra hàng trăm node như "Samsung
+        Electronics" hay "OpenAI" — chúng có cạnh tri thức nhưng không nằm trong vũ trụ SEC,
+        không có số liệu, nên đếm chúng vào mức phủ là thổi phồng con số.
+        """
+        upgraded = self.run(
+            """
+            MATCH (c:Company)
+            WHERE c.ticker IS NOT NULL AND coalesce(c.tier, 'metrics') <> 'graph'
+            OPTIONAL MATCH (c)-[r]-() WHERE NOT type(r) IN $infra
+            WITH c, count(r) AS n
+            WHERE n > 0
+            SET c.tier = 'graph'
+            RETURN count(c) AS n
+            """,
+            infra=INFRA_RELATIONS,
+        )
+
+        # Chiều ngược lại: mang nhãn 'graph' mà không còn cạnh tri thức nào. Xảy ra khi
+        # bảng dọn ở config/entity_merges.json bỏ hết cạnh của một doanh nghiệp. Ở đây chỉ
+        # BÁO chứ không tự hạ cấp: hạ xuống mức nào là câu hỏi không trả lời được từ Neo4j
+        # (còn văn bản trong Qdrant hay không thì đồ thị không biết), mà đoán sai lại tạo ra
+        # đúng cái lỗi báo thiếu năng lực mà hàm này đang đi sửa.
+        stale = self.run(
+            """
+            MATCH (c:Company) WHERE c.tier = 'graph'
+            OPTIONAL MATCH (c)-[r]-() WHERE NOT type(r) IN $infra
+            WITH c, count(r) AS n
+            WHERE n = 0
+            RETURN count(c) AS n
+            """,
+            infra=INFRA_RELATIONS,
+        )
+
+        return (
+            upgraded[0]["n"] if upgraded else 0,
+            stale[0]["n"] if stale else 0,
         )
 
     def upsert_filings(self, filings: List[Dict[str, Any]]) -> None:

@@ -51,9 +51,11 @@
         <div class="badge"><span class="dot"></span>Agentic GraphRAG · dữ liệu SEC EDGAR · chạy hoàn toàn trên máy local</div>
         <h1>Hỏi về doanh nghiệp.<br><span class="grad">Nhận số liệu thật, không phải số bịa.</span></h1>
         <p class="lede">
-          Trợ lý phân tích đọc báo cáo thường niên của <strong data-stat="companies">6.255</strong>
-          doanh nghiệp niêm yết tại Mỹ. Mọi con số lấy trực tiếp từ hồ sơ đã nộp cho Ủy ban
-          Chứng khoán — <strong>mô hình ngôn ngữ không bao giờ được tự đọc số</strong>.
+          Trợ lý phân tích đọc báo cáo thường niên của <strong data-stat="companies_us">6.074</strong>
+          doanh nghiệp niêm yết tại Mỹ, cộng thêm số liệu tài chính của
+          <strong data-stat="companies_vn">30</strong> doanh nghiệp niêm yết tại Việt Nam.
+          Mọi con số lấy trực tiếp từ hồ sơ doanh nghiệp tự công bố —
+          <strong>mô hình ngôn ngữ không bao giờ được tự đọc số</strong>.
         </p>
         <div class="hero-cta">
           <a class="btn btn-primary btn-lg" href="/chat">
@@ -133,10 +135,10 @@
     </div>
 
     <div class="stat-grid">
-      <div class="stat"><div class="stat-num" data-stat="companies">6.255</div><div class="stat-label">doanh nghiệp</div></div>
-      <div class="stat"><div class="stat-num" data-stat="financial_years">48.025</div><div class="stat-label">bản ghi năm tài chính</div></div>
-      <div class="stat"><div class="stat-num" data-stat="text_chunks">22.389</div><div class="stat-label">đoạn văn đã lập chỉ mục</div></div>
-      <div class="stat"><div class="stat-num" data-stat="knowledge_edges">1.939</div><div class="stat-label">quan hệ trong đồ thị</div></div>
+      <div class="stat"><div class="stat-num" data-stat="companies_listed">6.104</div><div class="stat-label">doanh nghiệp niêm yết</div></div>
+      <div class="stat"><div class="stat-num" data-stat="financial_years">48.265</div><div class="stat-label">bản ghi năm tài chính</div></div>
+      <div class="stat"><div class="stat-num" data-stat="text_chunks">23.869</div><div class="stat-label">đoạn văn đã lập chỉ mục</div></div>
+      <div class="stat"><div class="stat-num" data-stat="knowledge_edges">2.153</div><div class="stat-label">quan hệ trong đồ thị</div></div>
       <div class="stat stat-hl"><div class="stat-num">100%</div><div class="stat-label">chính xác số liệu (26/26)</div></div>
     </div>
   </div>
@@ -161,13 +163,13 @@
           <rect x="10" y="18" width="880" height="58" rx="16" fill="#ecfdf5" stroke="#a7f3d0"/>
           <path id="L1" d="M118 47 H470" fill="none"/>
           <text x="34" y="52" font-size="13" font-weight="700" fill="#047857">SỐ LIỆU</text>
-          <text x="860" y="52" font-size="12.5" fill="#047857" text-anchor="end" font-family="ui-monospace,Consolas,monospace">6.255 doanh nghiệp · 0 lần gọi LLM</text>
+          <text x="860" y="52" font-size="12.5" fill="#047857" text-anchor="end" font-family="ui-monospace,Consolas,monospace"><tspan data-stat="companies_listed">6.104</tspan> doanh nghiệp · 0 lần gọi LLM</text>
 
           <!-- làn 2 -->
           <rect x="10" y="96" width="880" height="58" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
           <path id="L2" d="M118 125 H470" fill="none"/>
           <text x="34" y="130" font-size="13" font-weight="700" fill="#0369a1">VĂN BẢN</text>
-          <text x="860" y="130" font-size="12.5" fill="#0369a1" text-anchor="end" font-family="ui-monospace,Consolas,monospace">22.389 đoạn · nhúng vector trên CPU</text>
+          <text x="860" y="130" font-size="12.5" fill="#0369a1" text-anchor="end" font-family="ui-monospace,Consolas,monospace"><tspan data-stat="text_chunks">23.869</tspan> đoạn · nhúng vector trên CPU</text>
 
           <!-- làn 3 -->
           <rect x="10" y="174" width="880" height="58" rx="16" fill="#f5f3ff" stroke="#ddd6fe"/>
@@ -199,26 +201,26 @@
       <div class="tier-row">
         <div><span class="tag tag-num">Số liệu</span></div>
         <div>Con số chính xác, so sánh, sàng lọc toàn thị trường</div>
-        <div class="mono"><strong data-stat="companies">6.255</strong> doanh nghiệp</div>
+        <div class="mono"><strong data-stat="companies_listed">6.104</strong> doanh nghiệp</div>
         <div>1 file 1,41 GB · 11 giây · <strong>0 lần gọi LLM</strong></div>
       </div>
       <div class="tier-row">
         <div><span class="tag tag-text">Văn bản</span></div>
         <div>Chiến lược, rủi ro, ban lãnh đạo nói gì</div>
-        <div class="mono"><strong data-stat="text_chunks">22.389</strong> đoạn văn</div>
+        <div class="mono"><strong data-stat="text_chunks">23.869</strong> đoạn văn</div>
         <div>vài giờ nhúng vector trên CPU</div>
       </div>
       <div class="tier-row">
         <div><span class="tag tag-graph">Đồ thị</span></div>
         <div>Quan hệ bắc cầu qua nhiều bước</div>
-        <div class="mono"><strong data-stat="tier_graph">84</strong> doanh nghiệp</div>
+        <div class="mono"><strong data-stat="tier_graph">95</strong> doanh nghiệp</div>
         <div>1 lần gọi LLM cho <em>mỗi</em> đoạn văn</div>
       </div>
     </div>
 
     <div class="notes">
       <div class="note">
-        <h4>Vì sao đồ thị không phủ hết 6.255 công ty</h4>
+        <h4>Vì sao đồ thị không phủ hết mọi doanh nghiệp</h4>
         <p>Phủ hết sẽ mất <strong>khoảng 50 ngày GPU chạy liên tục</strong>. Nhưng lý do sâu hơn nằm ở
           bản chất đồ thị: sức mạnh của nó ở <em>cạnh nối</em>, không phải số điểm.</p>
         <p>6.000 công ty ngẫu nhiên gần như không nhắc tên nhau — đồ thị sẽ rời rạc, nhiều điểm
@@ -266,7 +268,7 @@
           không đi qua mô hình ngôn ngữ ở bất kỳ khâu nào — nó chỉ được trình bày lại.</p>
         <p>Khi AI đọc một bảng biểu đã bị làm phẳng thành văn bản, nó rất dễ lấy nhầm cột hoặc
           nhầm đơn vị — và <strong>không báo lỗi gì cả</strong>.</p>
-        <div class="card-foot">Nguồn: hồ sơ XBRL · <span data-stat="companies">6.255</span> doanh nghiệp</div>
+        <div class="card-foot">Nguồn: hồ sơ XBRL · <span data-stat="companies_us">6.074</span> doanh nghiệp Mỹ</div>
       </article>
 
       <article class="card">
@@ -276,7 +278,7 @@
           dãy 384 con số, sao cho hai đoạn cùng nghĩa thì hai dãy nằm gần nhau.</p>
         <p>Nhờ vậy bạn gõ “rủi ro chuỗi cung ứng” vẫn tìm ra đoạn viết
           <em>“dependence on single-source suppliers”</em>.</p>
-        <div class="card-foot">Nguồn: mục 1A báo cáo 10-K · <span data-stat="text_chunks">22.389</span> đoạn</div>
+        <div class="card-foot">Nguồn: mục 1A báo cáo 10-K · <span data-stat="text_chunks">23.869</span> đoạn</div>
       </article>
 
       <article class="card">
@@ -297,7 +299,7 @@
             <text x="264" y="16" fill="#6d28d9" font-size="10">cạnh tranh</text>
           </g>
         </svg>
-        <div class="card-foot">Nguồn: <span data-stat="knowledge_edges">1.939</span> quan hệ · <span data-stat="relation_types">14</span> loại</div>
+        <div class="card-foot">Nguồn: <span data-stat="knowledge_edges">2.153</span> quan hệ · <span data-stat="relation_types">14</span> loại</div>
       </article>
     </div>
   </div>
@@ -436,10 +438,16 @@
     <div class="limits">
       <h4>Giới hạn — nói thẳng</h4>
       <ul>
-        <li><b>Không có doanh nghiệp Việt Nam</b> (trừ VinFast, vì họ niêm yết ở Mỹ). Đây là giới hạn của nguồn dữ liệu, không phải của mã nguồn.</li>
-        <li><b>Không quy đổi tỷ giá.</b> Toyota báo cáo bằng yên, TSMC bằng Đài tệ. Hệ thống ghi rõ đồng tiền và <em>từ chối</em> so sánh trực tiếp thay vì đoán bừa.</li>
-        <li><b>Đồ thị chỉ phủ <span data-stat="tier_graph">84</span> doanh nghiệp</b> — câu hỏi bắc cầu ngoài cụm bán dẫn/đám mây sẽ không có đường đi.</li>
-        <li><b>Chậm hơn dịch vụ đám mây.</b> 18–78 giây mỗi câu, vì mô hình chạy trên GPU 16 GB tại chỗ chứ không phải trên trung tâm dữ liệu.</li>
+        <li><b>Doanh nghiệp Việt Nam mới có số liệu, chưa có văn bản.</b>
+          <span data-stat="companies_vn">30</span> mã trong rổ VN30 tra được doanh thu, lợi nhuận, tài sản (nguồn VCI).
+          Nhưng hỏi <em>“FPT nêu rủi ro gì”</em> hay <em>“FPT có quan hệ với ai”</em> thì chưa trả lời được —
+          báo cáo thường niên tiếng Việt chưa được lập chỉ mục.</li>
+        <li><b>Không quy đổi tỷ giá.</b> Toyota báo cáo bằng yên, TSMC bằng Đài tệ, FPT bằng đồng.
+          Hệ thống ghi rõ đồng tiền và <em>từ chối</em> so sánh trực tiếp thay vì đoán bừa —
+          đây là lựa chọn có chủ đích, không phải việc còn dang dở.</li>
+        <li><b>Đồ thị chỉ phủ <span data-stat="tier_graph">95</span> doanh nghiệp</b> — câu hỏi bắc cầu ngoài cụm bán dẫn/đám mây sẽ không có đường đi.</li>
+        <li><b>Chậm hơn dịch vụ đám mây.</b> Trung vị 9 giây, nhưng câu hỏi định tính phải đọc nhiều đoạn văn
+          vẫn mất tới 90 giây, vì mô hình chạy trên GPU 16 GB tại chỗ chứ không phải trên trung tâm dữ liệu.</li>
       </ul>
     </div>
   </div>

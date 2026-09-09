@@ -209,6 +209,22 @@ def main() -> None:
     store.init_schema()
     store.upsert_relations(rows)
 
+    # Đồng bộ mức phủ NGAY SAU KHI nạp cạnh, vì đến lúc này mới biết doanh nghiệp nào
+    # thực sự có tri thức trong đồ thị. Bỏ sót bước này chính là lỗi đã xảy ra: script 05
+    # ghi chú "script 04 nâng lên graph" nhưng script 04 không hề gọi, nên Zoom có 105 cạnh
+    # mà vẫn mang nhãn 'text' và agent tự khai là mình không có dữ liệu đồ thị về Zoom.
+    upgraded, stale = store.sync_graph_tier()
+    console.print(
+        f"[dim]Mức phủ: nâng {upgraded} doanh nghiệp lên 'graph' "
+        f"(suy ra từ cạnh thật, không gán tay)[/]"
+    )
+    if stale:
+        console.print(
+            f"[yellow]Cảnh báo:[/] {stale} doanh nghiệp mang nhãn 'graph' nhưng không còn "
+            f"cạnh tri thức nào — nhiều khả năng bảng dọn đã bỏ hết cạnh của chúng. "
+            f"Kiểm tra config/entity_merges.json trước khi tin vào con số mức phủ."
+        )
+
     # ⚠️ BƯỚC NÀY CHƯA XONG VIỆC — PHẢI CHẠY TIẾP 09 RỒI 11.
     #
     # Bước nạp ở trên ghi lại TOÀN BỘ triples.jsonl, và tên thực thể trong file là tên

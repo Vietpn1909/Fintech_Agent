@@ -22,6 +22,13 @@ async function loadStats() {
 
     const values = {
       companies: s.companies,
+      // Ba con số tách bạch thay vì một tổng gộp. `companies` là tổng số node Company,
+      // trong đó có cả những tổ chức chỉ ĐƯỢC NHẮC TỚI trong hồ sơ (Samsung, OpenAI,
+      // Azure) — chúng không niêm yết và không có số liệu, nên không được đem ra làm
+      // con số quảng bá năng lực.
+      companies_us: s.companies_us,
+      companies_vn: s.companies_vn,
+      companies_listed: s.companies_listed,
       financial_years: s.financial_years,
       text_chunks: s.text_chunks,
       knowledge_edges: s.knowledge_edges,

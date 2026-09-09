@@ -278,6 +278,22 @@ def main() -> None:
     if loops:
         console.print(f"  đã xóa  {loops} vòng tự nối")
 
+    # ⚠️ ĐỒNG BỘ MỨC PHỦ Ở ĐÂY MỚI ĐÚNG, KHÔNG PHẢI CHỈ Ở SCRIPT 04.
+    #
+    # Chính bước gộp vừa rồi là lúc doanh nghiệp SEC NHẬN được cạnh tri thức: 104 cạnh
+    # từng nằm trên node "Zoom Communications, Inc" do mô hình đọc ra, phải gộp xong mới
+    # về node ZM. Nếu chỉ đồng bộ trong script 04 (chạy TRƯỚC 09 và 11) thì mọi doanh
+    # nghiệp lên mức 'graph' nhờ bước gộp đều bị bỏ sót — đúng cái đã xảy ra với ZM, CTSH,
+    # SWKS, GE, ERIC. Đây là bước cuối của pipeline nên nó thấy đồ thị ở trạng thái thật.
+    upgraded, stale = store.sync_graph_tier()
+    if upgraded:
+        console.print(f"  đã nâng {upgraded} doanh nghiệp lên mức phủ 'graph'")
+    if stale:
+        console.print(
+            f"  [yellow]{stale} doanh nghiệp mang nhãn 'graph' nhưng đã hết cạnh tri thức[/] "
+            f"— nhiều khả năng vừa bị bảng dọn lấy mất cạnh, xem lại config/entity_merges.json"
+        )
+
     after = counts(store)
     console.print(f"\n[bold]Sau:[/]   {after}")
 
