@@ -77,6 +77,42 @@ phẳng thành văn bản rất dễ lấy nhầm cột năm, nhầm đơn vị,
 doanh nghiệp khai và nộp cho SEC, mỗi con số gắn với mã `us-gaap`, kỳ báo cáo và số hiệu
 bản khai truy vết được. Agent tra số bằng tra cứu từ điển, không suy đoán.
 
+### Nhưng đó mới là một nửa, và nửa còn lại từng bị bỏ ngỏ
+
+Lấy số bằng mã lệnh thì đúng. Nhưng **câu trả lời cuối vẫn do mô hình viết ra** — nó nhận
+con số đúng rồi tự gõ thành đoạn văn, và trước đây không có gì kiểm lại đoạn văn đó.
+
+Đo trên chính bộ đánh giá 37 câu, có hai lỗi lọt qua:
+
+```
+chép sai    công cụ đưa 180.683.000.000 (lợi nhuận gộp Apple FY2024)
+            mô hình viết  119.100.000.000 — số nằm sẵn trong ngữ cảnh, chép lại vẫn sai
+
+sai bậc     doanh thu TSMC là 2.894.307.700.000 TWD
+            mô hình viết "2.894.307,70 tỷ TWD" — gấp 1.000 lần
+```
+
+Ca thứ hai đáng chú ý hơn: bộ đánh giá **chấm ĐẠT**, vì số thô đúng vẫn nằm trong ngoặc
+đơn. Nó chỉ dò xem con số kỳ vọng có xuất hiện hay không, chứ không hỏi ngược lại *"những
+con số KHÁC trong câu trả lời từ đâu ra?"*
+
+`src/agent/verify.py` hỏi đúng câu đó. Sau khi mô hình viết xong, mọi con số từ 1 triệu
+trở lên được đối chiếu với dữ liệu công cụ đã trả về (và với chính câu hỏi, vì ngưỡng lọc
+người dùng nêu ra cũng là nguồn hợp lệ). Lệch thì viết lại một lần; vẫn lệch thì gắn cảnh
+báo vào câu trả lời chứ **không tự sửa** — không biết phải thay bằng giá trị nào, và đoán
+hộ người đọc là việc không bao giờ đúng.
+
+Bước này là mã lệnh thuần, nên nó không hỏng theo cách khâu viết câu hỏng được.
+
+    128 con số được đối chiếu trên 37 câu
+      1 câu có số sai ở lần viết đầu -> viết lại -> sạch
+      0 cảnh báo gắn nhầm
+
+Kiểm thử ở `tests/test_verify.py` khoá cả hai chiều: ba ca **phải bắt** (chép sai, sai bậc,
+bịa thêm dòng) và sáu ca **không được báo** (số làm tròn, số âm, ngưỡng nhắc lại từ câu
+hỏi, nguồn tiếng Anh "$17.7 billion" đối chiếu với "17,7 tỷ USD"…). Sáu ca sau đều lấy từ
+những lần báo nhầm CÓ THẬT khi chạy trên dữ liệu thật, không phải ca giả định.
+
 ---
 
 ## Cài đặt

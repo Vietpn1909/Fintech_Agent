@@ -89,9 +89,13 @@ def main() -> None:
                 answer = out["answer"]
                 observations = out["observations"]
                 tools_used = [t.get("tool") for t in out["trace"] if t["step"] == "thực thi"]
+                # Bộ đối chiếu số ở khối trả lời — xem src/agent/verify.py. Ghi lại để đo
+                # xem nó bắt được bao nhiêu lỗi và có báo nhầm câu nào không.
+                answered = [t for t in out["trace"] if t["step"] == "trả lời"]
+                guard = answered[0] if answered else {}
                 error = None
             except Exception as exc:  # noqa: BLE001
-                answer, observations, tools_used = "", [], []
+                answer, observations, tools_used, guard = "", [], [], {}
                 error = str(exc)[:200]
 
             record = {
@@ -100,6 +104,10 @@ def main() -> None:
                 "contexts": collect_contexts(observations),
                 "tools_used": tools_used, "seconds": round(time.time() - started, 1),
                 "error": error,
+                "numbers_checked": guard.get("numbers_checked"),
+                "numbers_bad_first_pass": guard.get("numbers_unverified_first_pass"),
+                "numbers_bad_final": guard.get("numbers_unverified"),
+                "answer_retried": guard.get("retried"),
             }
 
             if q.grading == "numeric" and q.expected_value is not None:

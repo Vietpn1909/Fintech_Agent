@@ -45,6 +45,7 @@ from langgraph.graph import END, START, StateGraph
 
 from config.settings import settings
 from src.agent import tools
+from src.agent.verify import check_answer, warning_block
 from src.ingest.xbrl import METRIC_LABELS
 from src.llm.client import chat, chat_json, chat_stream
 
@@ -207,6 +208,10 @@ class AgentState(TypedDict, total=False):
     answer: str
     trace: List[Dict[str, Any]]
     reflection: str
+    # Kết quả đối chiếu số của câu trả lời cuối — xem src/agent/verify.py.
+    # PHẢI khai báo ở đây: AgentState là TypedDict và LangGraph chỉ giữ những khóa có
+    # trong khai báo, khóa lạ bị bỏ im lặng nên bên gọi luôn nhận về None.
+    number_check: Dict[str, Any]
     # Hàm nhận từng mẩu chữ của câu trả lời, do phía web truyền vào. Không truyền thì
     # khối trả lời chạy y như cũ, không stream.
     on_token: Any
@@ -487,14 +492,63 @@ def node_answer(state: AgentState) -> AgentState:
         answer = chat_stream(messages, on_token, **common)
     else:
         answer = chat(messages, **common)
+
+    # ⚠️ ĐỐI CHIẾU SỐ — LỚP CUỐI CÙNG, VÀ LÀ LỚP DUY NHẤT KIỂM CHÍNH MÔ HÌNH.
+    #
+    # Đến đây con số đã được lấy đúng bằng code, không qua LLM. Nhưng ĐOẠN VĂN vừa sinh
+    # ra thì do LLM viết, và đo trên 37 câu trả lời thật có ba lỗi lọt qua:
+    #
+    #   chép sai      công cụ đưa 180.683.000.000, mô hình viết 119.100.000.000
+    #   sai bậc       2.894.307.700.000 TWD viết thành "2.894.307,70 tỷ TWD" (gấp 1.000)
+    #   bịa thêm dòng công cụ trả 12 doanh nghiệp, mô hình liệt kê 16
+    #
+    # Bộ đánh giá chỉ bắt được ca đầu, vì nó dò xem con số KỲ VỌNG có xuất hiện không chứ
+    # không hỏi ngược lại "những con số khác từ đâu ra". Hàm dưới hỏi đúng câu đó.
+    check = check_answer(answer, observations, state.get("question", ""))
+    # Giữ lại số của LẦN VIẾT ĐẦU. Nếu chỉ ghi kết quả sau cùng thì mọi lần bộ đối chiếu
+    # bắt được lỗi rồi chữa xong đều trông y hệt như chưa từng có lỗi — tức là không đo
+    # được nó có ích tới đâu, và cũng không biết mô hình sai thường xuyên cỡ nào.
+    first_pass_bad = len(check["unverified"])
+
+    # Thử lại MỘT lần. Ca "bịa thêm dòng" thường tự khỏi khi được nhắc thẳng, và một lần
+    # gọi lại rẻ hơn nhiều so với việc trả về số sai. Không thử lại lần hai: nếu nhắc
+    # thẳng rồi vẫn sai thì gọi thêm cũng vậy, chỉ tốn thời gian.
+    #
+    # Chỉ thử lại ở nhánh KHÔNG stream. Nhánh stream đã đẩy chữ ra màn hình rồi, không thu
+    # về được — ở đó chỉ còn cách gắn cảnh báo vào cuối.
+    retried = False
+    if not check["ok"] and not callable(on_token):
+        retried = True
+        offenders = ", ".join(item["text"] for item in check["unverified"][:8])
+        messages.append({"role": "assistant", "content": answer})
+        messages.append({"role": "user", "content":
+            f"Các số sau trong câu trả lời KHÔNG có trong dữ liệu công cụ trả về: {offenders}.\n"
+            "Viết lại câu trả lời và CHỈ dùng những con số có thật trong dữ liệu ở trên. "
+            "Không thêm doanh nghiệp nào ngoài danh sách công cụ đã trả về. "
+            "Không suy ra, không nhớ lại, không làm tròn sang bậc độ lớn khác."})
+        answer = chat(messages, **common)
+        check = check_answer(answer, observations, state.get("question", ""))
+
+    # Vẫn còn số lạ thì NÓI THẲNG ra, không im lặng và cũng không tự sửa. Không biết phải
+    # thay bằng giá trị nào: chép sai và bịa hẳn một dòng mới là hai ca khác nhau.
+    if not check["ok"]:
+        block = warning_block(check)
+        answer = answer + block
+        if callable(on_token):
+            on_token(block)  # đẩy nốt cảnh báo xuống trình duyệt
+
     trace = state.get("trace", [])
     trace.append({
         "step": "trả lời",
         "seconds": round(time.time() - started, 1),
         "reasoning": effort,
         "payload_chars": payload_size,
+        "numbers_checked": check["checked"],
+        "numbers_unverified_first_pass": first_pass_bad,
+        "numbers_unverified": len(check["unverified"]),
+        "retried": retried,
     })
-    return {**state, "answer": answer, "trace": trace}
+    return {**state, "answer": answer, "trace": trace, "number_check": check}
 
 
 def should_continue(state: AgentState) -> str:
@@ -547,4 +601,7 @@ def ask(question: str, verbose: bool = False) -> Dict[str, Any]:
         "observations": final.get("observations", []) if verbose else None,
         "rounds": final.get("round", 0),
         "seconds": round(time.time() - started, 1),
+        # Kết quả đối chiếu số. Đưa ra ngoài để bộ đánh giá và giao diện đều thấy được
+        # câu trả lời nào có con số không truy được về nguồn.
+        "number_check": final.get("number_check"),
     }
