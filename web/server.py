@@ -29,11 +29,12 @@ Chạy:
 from __future__ import annotations
 
 import json
+import queue
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any, Dict, Iterator, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -177,6 +178,9 @@ def health() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         status["detail"]["llm"] = str(exc)[:200]
 
+    # Số câu hỏi đang chờ hoặc đang chạy. Giữ lại vì chính con số này đã lộ ra lỗi rò
+    # rỉ cổng: nó đứng yên ở 1 trong khi không còn luồng agent nào chạy.
+    status["in_flight"] = _queue_depth["n"]
     status["ready"] = all((status["neo4j"], status["qdrant"], status["llm"]))
     return status
 
@@ -235,50 +239,72 @@ def _sse(event: Dict[str, Any]) -> str:
 
 
 def run_agent_stream(question: str) -> Iterator[str]:
-    """Chạy agent và đẩy từng bước xuống trình duyệt ngay khi bước đó xong.
+    """Chạy agent ở luồng riêng và đẩy mọi sự kiện xuống trình duyệt qua một hàng đợi.
 
-    LangGraph cho phép `.stream(stream_mode="updates")` — sau mỗi khối nó trả về phần
-    state vừa thay đổi. Các khối ở đây trả về `{**state, ...}` nên mỗi lần cập nhật mang
-    theo TOÀN BỘ dấu vết; ta chỉ phát ra phần đuôi chưa gửi.
+    HAI LÝ DO PHẢI TÁCH LUỒNG
+
+    1. Câu trả lời sinh dần bên trong khối "trả lời", tức là ở SÂU trong lời gọi
+       agent.stream(). Generator đang kẹt trong đó thì không có cơ hội yield, nên không
+       thể đẩy từng mẩu chữ ra ngay được.
+
+    2. ⚠️ QUAN TRỌNG HƠN: GENERATOR KHÔNG PHẢI CHỖ ĐỂ GIỮ TÀI NGUYÊN.
+
+       Bản trước giữ semaphore trong generator và nhả ở `finally`. Nghe thì đúng, nhưng
+       một generator chỉ chạy tiếp khi có người gọi `next()`. Người dùng đóng tab giữa
+       chừng thì Starlette ngừng gọi `next()`, generator nằm yên mãi ở câu `yield` cuối
+       cùng, và `finally` KHÔNG BAO GIỜ chạy.
+
+       Đo thật: ngắt kết nối sau 3 giây rồi theo dõi 70 giây tiếp theo —
+           +2s   gate_free=0  queue=1  threads=['agent-run']
+           +10s  gate_free=0  queue=1  threads=[]      <- agent xong rồi
+           +70s  gate_free=0  queue=1  threads=[]      <- cổng vẫn kẹt
+       Agent đã chạy xong từ lâu mà cổng vẫn bị giữ, nên MỌI câu hỏi sau đó đều xếp hàng
+       vĩnh viễn. Một người đóng tab là cả máy chủ chết.
+
+       Cách sửa: luồng agent tự giữ và tự nhả cổng. Luồng thường luôn chạy hết tới
+       `finally` bất kể phía tiêu thụ còn nghe hay không. Generator ở đây không giữ gì
+       cả — bỏ rơi nó lúc nào cũng an toàn.
 
     Vì sao không viết async: các thư viện bên dưới (neo4j driver, openai client,
     fastembed) đều đồng bộ. Bọc chúng trong `async def` mà không await gì sẽ chặn event
-    loop và làm đứng toàn bộ máy chủ, kể cả trang tĩnh. StreamingResponse của Starlette
-    tự chạy iterator đồng bộ trong threadpool, nên viết đồng bộ là đúng.
+    loop và làm đứng toàn bộ máy chủ, kể cả trang tĩnh.
     """
-    started = time.time()
+    events: "queue.Queue[Optional[tuple]]" = queue.Queue()
 
-    with _waiting:
-        _queue_depth["n"] += 1
-        position = _queue_depth["n"]
-
-    if position > 1:
-        yield _sse({"type": "queued", "position": position - 1})
-
-    acquired = _llm_gate.acquire(timeout=600)
-    try:
-        if not acquired:
-            yield _sse({"type": "error", "message": "Máy chủ đang quá tải, thử lại sau."})
-            return
-
-        yield _sse({"type": "start", "question": question})
-
+    def worker() -> None:
+        started = time.time()
+        acquired = False
+        counted = False
         try:
-            agent = backend()["agent"]
-        except Exception as exc:  # noqa: BLE001
-            yield _sse({
-                "type": "error",
-                "message": f"Không khởi tạo được backend: {str(exc)[:200]}",
-                "hint": "Chạy `docker compose up -d` để bật Neo4j và Qdrant.",
-            })
-            return
+            with _waiting:
+                _queue_depth["n"] += 1
+                position = _queue_depth["n"]
+            counted = True
 
-        sent = 0
-        final: Dict[str, Any] = {}
+            if position > 1:
+                events.put(("queued", position - 1))
 
-        try:
+            acquired = _llm_gate.acquire(timeout=600)
+            if not acquired:
+                events.put(("fatal", "Máy chủ đang quá tải, thử lại sau."))
+                return
+
+            events.put(("start", question))
+
+            try:
+                agent = backend()["agent"]
+            except Exception as exc:  # noqa: BLE001
+                events.put(("fatal", f"Không khởi tạo được backend: {str(exc)[:200]}",
+                            "Chạy `docker compose up -d` để bật Neo4j và Qdrant."))
+                return
+
+            sent = 0
+            final: Dict[str, Any] = {}
             for update in agent.stream(
-                {"question": question, "round": 0, "observations": [], "trace": []},
+                {
+                    "question": question, "round": 0, "observations": [], "trace": [],
+                    "on_token": lambda piece: events.put(("token", piece)),
+                },
                 stream_mode="updates",
             ):
                 for _node, delta in update.items():
@@ -287,38 +313,64 @@ def run_agent_stream(question: str) -> Iterator[str]:
                     final = delta
                     trace = delta.get("trace") or []
                     while sent < len(trace):
-                        yield _sse({"type": "step", "data": _enrich(trace[sent])})
+                        events.put(("step", _enrich(trace[sent])))
                         sent += 1
+
+            answer = final.get("answer") or ""
+            if not answer:
+                events.put(("fatal", "Agent không tạo được câu trả lời.",
+                            "Thường do LLM trả về rỗng khi hết token. Thử hỏi ngắn gọn hơn."))
+                return
+
+            # Gửi lại toàn văn dù đã đẩy từng mẩu: trình duyệt dựng lại Markdown một lần
+            # cuối từ bản đầy đủ, nên không lệ thuộc vào việc ghép các mẩu có chuẩn hay
+            # không. Client cũ chỉ nghe `answer` cũng vẫn chạy đúng.
+            events.put(("answer", answer))
+            events.put(("done", round(time.time() - started, 1), final.get("round", 0)))
+
         except Exception as exc:  # noqa: BLE001
-            message = str(exc)[:300]
+            events.put(("error", exc))
+        finally:
+            # Cả ba việc dọn dẹp đều nằm ở đây, trong một luồng thường — nơi `finally`
+            # chắc chắn chạy, khác hẳn generator.
+            if acquired:
+                _llm_gate.release()
+            if counted:
+                with _waiting:
+                    _queue_depth["n"] -= 1
+            events.put(None)
+
+    threading.Thread(target=worker, daemon=True, name="agent-run").start()
+
+    while True:
+        item = events.get()
+        if item is None:
+            break
+        kind = item[0]
+
+        if kind == "token":
+            yield _sse({"type": "token", "text": item[1]})
+        elif kind == "step":
+            yield _sse({"type": "step", "data": item[1]})
+        elif kind == "queued":
+            yield _sse({"type": "queued", "position": item[1]})
+        elif kind == "start":
+            yield _sse({"type": "start", "question": item[1]})
+        elif kind == "answer":
+            yield _sse({"type": "answer", "text": item[1]})
+        elif kind == "done":
+            yield _sse({"type": "done", "seconds": item[1], "rounds": item[2]})
+        elif kind == "fatal":
+            yield _sse({"type": "error", "message": item[1],
+                        "hint": item[2] if len(item) > 2 else ""})
+        elif kind == "error":
+            message = str(item[1])[:300]
             low = message.lower()
             hint = ""
             if any(k in low for k in ("connect", "refused", "timeout", "10061")):
                 hint = ("Kiểm tra LM Studio đã bật server chưa (tab Developer → Start "
                         "Server), và Docker đã chạy `docker compose up -d` chưa.")
             yield _sse({"type": "error", "message": message, "hint": hint})
-            return
-
-        answer = final.get("answer") or ""
-        if not answer:
-            yield _sse({
-                "type": "error",
-                "message": "Agent không tạo được câu trả lời.",
-                "hint": "Thường do LLM trả về rỗng khi hết token. Thử hỏi ngắn gọn hơn.",
-            })
-            return
-
-        yield _sse({"type": "answer", "text": answer})
-        yield _sse({
-            "type": "done",
-            "seconds": round(time.time() - started, 1),
-            "rounds": final.get("round", 0),
-        })
-    finally:
-        if acquired:
-            _llm_gate.release()
-        with _waiting:
-            _queue_depth["n"] -= 1
 
 
 @app.post("/api/ask")

@@ -222,6 +222,26 @@ async function submit(question) {
     const t = body.querySelector('.working em');
     if (t) t.textContent = txt;
   };
+
+  /* Chữ chạy dần.
+   *
+   * Dựng lại Markdown cho TOÀN BỘ văn bản mỗi lần có mẩu mới là O(n²), và với câu trả
+   * lời vài nghìn ký tự thì trình duyệt giật thấy rõ. Nên gom lại và chỉ vẽ mỗi khung
+   * hình một lần — mắt người không phân biệt nổi nhanh hơn thế.
+   *
+   * Vẽ lại từ đầu chứ không nối thêm, vì Markdown không cắt được: một bảng hay một khối
+   * đậm có thể đang dở dang, phải dựng lại cả chuỗi mới ra đúng. */
+  let streamed = '';
+  let painting = false;
+  const paint = () => {
+    painting = false;
+    body.innerHTML = md(streamed);
+    scrollDown();
+  };
+  const appendToken = (piece) => {
+    streamed += piece;
+    if (!painting) { painting = true; requestAnimationFrame(paint); }
+  };
   const fail = (msg, hint) => {
     body.innerHTML = `<div class="err"><b>Không hoàn thành được</b>
       <p>${esc(msg)}</p>${hint ? `<p>${esc(hint)}</p>` : ''}</div>`;
@@ -273,7 +293,12 @@ async function submit(question) {
             'đang soạn câu trả lời…'
           );
           scrollDown();
+        } else if (ev.type === 'token') {
+          appendToken(ev.text);
         } else if (ev.type === 'answer') {
+          // Toàn văn từ máy chủ là bản chuẩn — vẽ lại một lần cuối từ nó, để kết quả
+          // không phụ thuộc vào việc ghép các mẩu có sót gì không.
+          streamed = ev.text;
           body.innerHTML = md(ev.text);
           scrollDown();
         } else if (ev.type === 'done') {

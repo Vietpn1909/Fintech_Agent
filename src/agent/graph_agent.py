@@ -46,7 +46,7 @@ from langgraph.graph import END, START, StateGraph
 from config.settings import settings
 from src.agent import tools
 from src.ingest.xbrl import METRIC_LABELS
-from src.llm.client import chat, chat_json
+from src.llm.client import chat, chat_json, chat_stream
 
 MAX_ROUNDS = 3
 
@@ -207,6 +207,9 @@ class AgentState(TypedDict, total=False):
     answer: str
     trace: List[Dict[str, Any]]
     reflection: str
+    # Hàm nhận từng mẩu chữ của câu trả lời, do phía web truyền vào. Không truyền thì
+    # khối trả lời chạy y như cũ, không stream.
+    on_token: Any
 
 
 def _truncate(obj: Any, limit: int = 3500) -> str:
@@ -462,19 +465,28 @@ def node_answer(state: AgentState) -> AgentState:
     effort = "none"
 
     started = time.time()
-    answer = chat(
-        [
-            {"role": "system", "content": ANSWER_PROMPT},
-            {"role": "user", "content":
-                f"Câu hỏi: {state['question']}\n\n"
-                f"Dữ liệu công cụ trả về:\n{_truncate(state.get('observations', []), 9000)}"},
-        ],
+    messages = [
+        {"role": "system", "content": ANSWER_PROMPT},
+        {"role": "user", "content":
+            f"Câu hỏi: {state['question']}\n\n"
+            f"Dữ liệu công cụ trả về:\n{_truncate(state.get('observations', []), 9000)}"},
+    ]
+    common = dict(
         model=settings.llm_reasoning_model,
         max_tokens=4096,
         temperature=0.2,  # nhỉnh hơn 0 một chút cho câu văn tự nhiên, vẫn bám dữ liệu
         # Mức suy nghĩ do payload_size quyết định — xem chú thích ở đầu hàm.
         reasoning_effort=effort,
     )
+
+    # Phía web truyền vào một hàm nhận từng mẩu chữ, để chữ hiện dần lên màn hình thay vì
+    # đợi trọn 8-25 giây. Bộ đánh giá và mọi lời gọi khác KHÔNG truyền gì và đi đúng nhánh
+    # cũ — nhờ vậy việc thêm chế độ stream không đụng tới con đường đã kiểm chứng 26/26.
+    on_token = state.get("on_token")
+    if callable(on_token):
+        answer = chat_stream(messages, on_token, **common)
+    else:
+        answer = chat(messages, **common)
     trace = state.get("trace", [])
     trace.append({
         "step": "trả lời",

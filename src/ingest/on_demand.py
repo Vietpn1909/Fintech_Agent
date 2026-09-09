@@ -223,6 +223,63 @@ def resolve_ticker(query: str, limit: int = 5) -> List[Dict[str, str]]:
     return out
 
 
+_vn_map: Optional[Dict[str, Dict[str, str]]] = None
+
+
+def vn_companies() -> Dict[str, Dict[str, str]]:
+    """Bảng tra doanh nghiệp niêm yết tại Việt Nam đã nạp vào đồ thị: mã -> thông tin.
+
+    Đọc một lần rồi giữ lại. Không có thì trả về bảng rỗng, và toàn bộ phần phân giải
+    tên hoạt động y như trước — nạp dữ liệu Việt Nam là tùy chọn, không phải bắt buộc.
+    """
+    global _vn_map
+    if _vn_map is None:
+        try:
+            store = GraphStore()
+            rows = store.run(
+                "MATCH (c:Company {market:'VN'}) "
+                "RETURN c.symbol AS symbol, c.ticker AS ticker, c.name AS name"
+            )
+            store.close()
+            _vn_map = {
+                (r["symbol"] or "").upper(): {
+                    "ticker": r["ticker"], "name": r["name"] or r["symbol"],
+                    "cik": None, "market": "VN",
+                }
+                for r in rows if r.get("symbol")
+            }
+        except Exception:  # noqa: BLE001 — chưa nạp dữ liệu VN thì bỏ qua
+            _vn_map = {}
+    return _vn_map
+
+
+def _resolve_vn(query: str) -> List[Dict[str, str]]:
+    """Khớp câu hỏi với doanh nghiệp Việt Nam: đúng mã, hoặc tên chứa trọn cụm từ."""
+    table = vn_companies()
+    if not table:
+        return []
+
+    raw = (query or "").strip()
+    upper = raw.upper()
+    # Người dùng có thể gõ thẳng "FPT.VN" để chỉ đích danh sàn Việt Nam
+    if upper.endswith(".VN"):
+        upper = upper[:-3]
+
+    if upper in table:
+        info = table[upper]
+        return [{**info, "match": "ticker", "confidence": "high"}]
+
+    simple = _simplify(raw)
+    if len(simple) < 4:
+        return []
+    hits = []
+    for symbol, info in table.items():
+        name_simple = _simplify(info["name"])
+        if name_simple and (name_simple == simple or name_simple.startswith(simple + " ")):
+            hits.append({**info, "match": "exact", "confidence": "high"})
+    return hits
+
+
 def _suggest(query: str, k: int = 3) -> List[Dict[str, str]]:
     """Vài cái tên gần nhất, CHỈ để gợi ý — không bao giờ được tự động chọn.
 
@@ -291,6 +348,31 @@ def resolve_company(query: str, limit: int = 5) -> Dict[str, Any]:
     """
     candidates = resolve_ticker(query, limit=limit)
     strong = [c for c in candidates if c.get("confidence") == "high"]
+    vn = _resolve_vn(query)
+
+    # ⚠️ MÃ TRÙNG GIỮA HAI SÀN — KHÔNG ĐƯỢC TỰ CHỌN BÊN NÀO.
+    #
+    # 8/30 mã trong rổ VN30 trùng với mã của SEC, và chúng là hai doanh nghiệp hoàn toàn
+    # khác nhau:
+    #     ACB   Ngân hàng Á Châu        <->  AURORA CANNABIS INC
+    #     MSN   Tập đoàn Masan          <->  EMERSON RADIO CORP
+    #     PLX   Petrolimex              <->  Protalix BioTherapeutics
+    #     TPB   TPBank                  <->  Turning Point Brands
+    #
+    # Ưu tiên cứng bên nào cũng sinh ra đúng loại lỗi vừa mới sửa: trả về số liệu đầy đủ
+    # của một doanh nghiệp hoàn toàn khác mà không báo gì. Nên khi cả hai cùng khớp,
+    # trả về `ambiguous` kèm cả hai để agent hỏi lại người dùng.
+    if strong and vn:
+        return {
+            "status": "ambiguous", "query": query,
+            "options": [strong[0], vn[0]],
+            "hint": (f"Mã '{query}' vừa là doanh nghiệp Mỹ ({strong[0]['name']}) vừa là "
+                     f"doanh nghiệp Việt Nam ({vn[0]['name']}). Hãy hỏi lại người dùng ý "
+                     f"nào, hoặc gọi lại với '{vn[0]['ticker']}' cho bên Việt Nam."),
+        }
+
+    if vn and not strong:
+        return {"status": "ok", "best": vn[0], "alternatives": vn[1:limit]}
 
     if not strong:
         # Ứng viên yếu vẫn trả về, nhưng dán nhãn rõ là gợi ý — để agent có thể hỏi lại

@@ -119,6 +119,41 @@ class GraphStore:
             written += len(batch)
         return written
 
+    def upsert_vn_companies(self, companies: List[Dict[str, str]]) -> int:
+        """Doanh nghiệp niêm yết tại Việt Nam.
+
+        ⚠️ PHẢI MERGE THEO `ticker`, TUYỆT ĐỐI KHÔNG DÙNG `upsert_companies`.
+
+        `upsert_companies` MERGE theo `cik` — mã định danh do SEC cấp. Doanh nghiệp Việt
+        Nam không có CIK, và trong Neo4j `MERGE (c:Company {cik: null})` khớp với BẤT KỲ
+        node nào có cik null. Hậu quả: toàn bộ doanh nghiệp Việt Nam dồn vào đúng một
+        node, mỗi lần nạp lại ghi đè lên nhau, và không có lỗi nào báo ra.
+        (Ràng buộc duy nhất trên `cik` cũng không cứu được: Neo4j bỏ qua giá trị null.)
+
+        Mã được gắn hậu tố `.VN` để không đụng mã Mỹ — sàn HOSE có mã "FPT", NYSE cũng
+        có "FPT" của một quỹ đóng khác hẳn.
+        """
+        self.run(
+            """
+            UNWIND $rows AS row
+            MERGE (c:Company {ticker: row.ticker})
+            SET c.market = 'VN',
+                c.exchange = coalesce(row.exchange, 'HOSE'),
+                c.symbol = row.symbol,
+                c.tier = coalesce(c.tier, 'metrics'),
+                // Khác với doanh nghiệp SEC (dùng ON CREATE SET để giữ tên đẹp đã gộp
+                // bằng tay), tên doanh nghiệp Việt Nam luôn ghi đè từ nguồn: VCI là
+                // nguồn duy nhất cho nhóm này và không có bước gộp thủ công nào.
+                //
+                // Cần thiết chứ không chỉ cho gọn: bản đầu lấy tên sai chỗ nên mọi doanh
+                // nghiệp vào đồ thị dưới cái tên là chính mã của nó ("ACB", "BID"). Nếu
+                // giữ ON CREATE SET thì chạy lại cũng không sửa được, phải xóa node đi.
+                c.name = row.name
+            """,
+            rows=companies,
+        )
+        return len(companies)
+
     # Thứ bậc mức phủ. Số càng lớn càng phủ sâu.
     TIER_RANK = {"metrics": 0, "text": 1, "graph": 2}
 

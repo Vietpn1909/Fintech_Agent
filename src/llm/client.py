@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -131,6 +131,86 @@ def chat(
             kwargs["reasoning_effort"] = "none"
             retry_resp = get_client().chat.completions.create(**kwargs)
             content = retry_resp.choices[0].message.content or ""
+            if content.strip():
+                return content
+        raise RuntimeError(
+            "Model dùng hết token cho phần suy nghĩ mà chưa kịp trả lời, "
+            "kể cả khi đã tắt suy nghĩ. Cần tăng max_tokens."
+        )
+
+    return content
+
+
+def chat_stream(
+    messages: List[Dict[str, str]],
+    on_token: Callable[[str], None],
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    reasoning_effort: Optional[str] = None,
+) -> str:
+    """Như `chat()`, nhưng gọi `on_token` cho từng mẩu chữ ngay khi model sinh ra.
+
+    VÌ SAO CẦN: tổng thời gian KHÔNG đổi, nhưng CẢM GIÁC chờ thì đổi hẳn.
+
+    Khối trả lời mất 8-25 giây. Chờ trọn từng ấy giây rồi mới thấy chữ hiện ra một lúc
+    khiến người dùng tưởng hệ thống treo. Chữ chạy dần từ giây thứ hai thì cùng một
+    khoảng thời gian đó lại thấy ngắn — đây là cải thiện rẻ nhất cho trải nghiệm, vì
+    không phải tối ưu gì trong mô hình cả.
+
+    ⚠️ CHỈ ĐẨY `delta.content`, KHÔNG ĐẨY `delta.reasoning_content`.
+
+    Model có bước suy nghĩ trả về hai luồng token riêng. Đẩy nhầm luồng suy nghĩ ra màn
+    hình thì người dùng đọc được phần model tự lẩm bẩm — vừa rối vừa lộ ra những suy đoán
+    chưa kiểm chứng. Đây chính là cái bẫy đã làm hỏng script benchmark trước đây, chỉ là
+    theo chiều ngược lại: nó ĐẾM THIẾU vì bỏ qua reasoning_content.
+
+    Trả về toàn văn, để phía gọi dùng y như `chat()`.
+    """
+    kwargs: Dict[str, Any] = {
+        "model": model or settings.llm_reasoning_model,
+        "messages": messages,
+        "temperature": settings.llm_temperature if temperature is None else temperature,
+        "max_tokens": max_tokens or settings.llm_max_tokens,
+        "stream": True,
+    }
+    effort = reasoning_effort if reasoning_effort is not None else settings.llm_reasoning_effort
+    if effort and effort != "default":
+        kwargs["reasoning_effort"] = effort
+
+    def _run(call_kwargs: Dict[str, Any]) -> tuple:
+        parts: List[str] = []
+        finish = None
+        stream = get_client().chat.completions.create(**call_kwargs)
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            piece = getattr(choice.delta, "content", None)
+            if piece:
+                parts.append(piece)
+                on_token(piece)
+            if choice.finish_reason:
+                finish = choice.finish_reason
+        return "".join(parts), finish
+
+    try:
+        content, finish_reason = _run(kwargs)
+    except Exception as exc:  # noqa: BLE001
+        # Model không phải loại có reasoning thì tham số này gây lỗi -> bỏ đi rồi thử lại
+        if "reasoning_effort" in str(exc).lower():
+            kwargs.pop("reasoning_effort", None)
+            content, finish_reason = _run(kwargs)
+        else:
+            raise
+
+    # Cùng cái bẫy mà `chat()` xử lý: model tiêu hết ngân sách token cho phần suy nghĩ
+    # rồi bị cắt trước khi kịp trả lời. Lúc này chưa đẩy ra chữ nào nên thử lại vẫn an
+    # toàn — người dùng không thấy văn bản bị viết đè.
+    if not content.strip() and finish_reason == "length":
+        if kwargs.get("reasoning_effort") != "none":
+            kwargs["reasoning_effort"] = "none"
+            content, _ = _run(kwargs)
             if content.strip():
                 return content
         raise RuntimeError(

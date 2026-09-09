@@ -66,6 +66,36 @@ def vectors() -> VectorStore:
 # --------------------------------------------------------------------- tra cứu số liệu
 
 
+def _resolution_failure(query, resolved: Dict[str, Any]) -> Dict[str, Any]:
+    """Biến một lần phân giải KHÔNG thành công thành kết quả công cụ nói rõ vì sao.
+
+    Hai lý do khác hẳn nhau, và agent phải phản ứng khác nhau:
+
+      not_found  không có doanh nghiệp nào tên như vậy -> nói thẳng là không có dữ liệu
+      ambiguous  có nhiều hơn một doanh nghiệp khớp (mã trùng giữa sàn Mỹ và sàn Việt
+                 Nam) -> HỎI LẠI người dùng, tuyệt đối không tự chọn một bên
+
+    Gộp hai trường hợp này làm một là quay lại đúng lỗi đã sửa: im lặng chọn bừa.
+    """
+    if resolved.get("status") == "ambiguous":
+        return {
+            "status": "ambiguous",
+            "query": query,
+            "options": [
+                {"ticker": o["ticker"], "company": o["name"],
+                 "market": o.get("market", "US")}
+                for o in resolved.get("options", [])
+            ],
+            "hint": resolved.get("hint", ""),
+        }
+    return {
+        "status": "not_found",
+        "query": query,
+        "suggestions": [s["name"] for s in resolved.get("suggestions", [])],
+        "hint": _NOT_IN_SEC_HINT,
+    }
+
+
 def lookup_financials(
     company: str,
     metrics: Optional[List[str]] = None,
@@ -83,22 +113,21 @@ def lookup_financials(
     # yếu sẽ ra not_found kèm gợi ý, thay vì một con số đúng gắn nhầm doanh nghiệp.
     resolved = resolve_company(company)
     if resolved["status"] != "ok":
-        return {"status": "not_found", "query": company,
-                "suggestions": [s["name"] for s in resolved.get("suggestions", [])],
-                "hint": _NOT_IN_SEC_HINT}
+        return _resolution_failure(company, resolved)
 
     best = resolved["best"]
     rows = graph().run(
         """
         MATCH (c:Company {ticker: $ticker})-[:HAS_FINANCIALS]->(fy:FinancialYear)
         WHERE $years IS NULL OR fy.fiscal_year IN $years
-        RETURN fy AS data ORDER BY fy.fiscal_year DESC LIMIT 12
+        RETURN fy AS data, c.market AS market ORDER BY fy.fiscal_year DESC LIMIT 12
         """,
         ticker=best["ticker"], years=years,
     )
     if not rows:
         return {"status": "no_data", "ticker": best["ticker"], "company": best["name"]}
 
+    market = rows[0].get("market")
     wanted = metrics or list(METRIC_LABELS.keys())
     records = []
     for row in rows:
@@ -121,7 +150,20 @@ def lookup_financials(
         "matched_by": best.get("match"),
         # Có nhiều doanh nghiệp cùng khớp mạnh -> nêu ra để agent nói rõ nó đã chọn ai.
         "alternatives": [a["name"] for a in resolved.get("alternatives", [])[:3]],
-        "source": "XBRL do doanh nghiệp khai báo với SEC",
+        # ⚠️ NGUỒN PHẢI ĐÚNG VỚI TỪNG THỊ TRƯỜNG.
+        #
+        # Trước khi có dữ liệu Việt Nam, chuỗi này được ghi cứng là "khai báo với SEC" và
+        # điều đó đúng với mọi doanh nghiệp trong hệ thống. Sau khi thêm VN30 thì không
+        # còn đúng nữa: hỏi doanh thu FPT, agent vẫn dẫn nguồn là "XBRL khai báo với SEC"
+        # — trong khi FPT không hề nộp hồ sơ nào cho SEC.
+        #
+        # Con số thì đúng, nguồn thì sai, và không có gì báo lỗi. Đúng loại hỏng mà cả dự
+        # án được xây ra để ngăn, chỉ khác là nó nằm ở phần dẫn nguồn chứ không ở con số.
+        "source": (
+            "Báo cáo tài chính doanh nghiệp niêm yết tại Việt Nam (nguồn VCI), đơn vị VND"
+            if market == "VN"
+            else "XBRL do doanh nghiệp khai báo với SEC"
+        ),
         "years": records,
     }
 
@@ -514,9 +556,7 @@ def company_coverage(company: str) -> Dict[str, Any]:
     """Cho biết hệ thống đang có gì về một doanh nghiệp — để agent nói thật với người dùng."""
     resolved = resolve_company(company)
     if resolved["status"] != "ok":
-        return {"status": "not_found", "query": company,
-                "suggestions": [s["name"] for s in resolved.get("suggestions", [])],
-                "hint": _NOT_IN_SEC_HINT}
+        return _resolution_failure(company, resolved)
 
     best = resolved["best"]
     cands = [best] + resolved.get("alternatives", [])

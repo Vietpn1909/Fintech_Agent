@@ -114,8 +114,14 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/06_build_text_index.py --top-revenue 500   # tùy chọn
 
 # --- Tầng đồ thị (cần LM Studio) ---
+# ⚠️ Ba bước này là MỘT khối, phải chạy đủ và đúng thứ tự — xem mục "Thứ tự pipeline".
 .venv/Scripts/python.exe scripts/04_build_knowledge_graph.py --limit 10   # chạy thử
 .venv/Scripts/python.exe scripts/04_build_knowledge_graph.py --resume     # chạy thật
+.venv/Scripts/python.exe scripts/09_resolve_entities.py                   # gộp node tách đôi
+.venv/Scripts/python.exe scripts/11_merge_graph_entities.py --apply       # gộp vào bản ghi SEC
+
+# --- Tầng số liệu Việt Nam (không cần LM Studio) ---
+.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --apply
 
 # --- Đánh giá ---
 .venv/Scripts/python.exe scripts/07_build_testset.py                 # sinh 34 câu hỏi
@@ -167,6 +173,9 @@ không bỏ được, nhưng người dùng bình thường không cần nhìn �
 
 ### Có gì trong đó
 
+- **Câu trả lời chạy dần ra màn hình.** Tổng thời gian không đổi, nhưng chữ bắt đầu
+  hiện từ giây thứ 3-5 thay vì chờ trọn 8-25 giây rồi mới thấy cả khối. Đây là cải thiện
+  trải nghiệm rẻ nhất trong dự án — không phải tối ưu gì trong mô hình.
 - **Dấu vết suy luận** — định tuyến chọn công cụ nào, mỗi công cụ nhận tham số gì, truy
   vấn nguồn nào, mất bao lâu, khối suy xét kết luận đủ hay phải quay lại. Với hội đồng
   chấm, phần này quan trọng ngang câu trả lời: nó chứng minh hệ thống **thực sự định
@@ -398,6 +407,159 @@ Sau khi sửa: **0 hạ tầng + 12 tri thức** cho cả sáu doanh nghiệp đ
 
 ---
 
+## Thứ tự pipeline bắt buộc: 04 → 09 → 11
+
+⚠️ **Bước nạp của script 04 ghi lại TOÀN BỘ `triples.jsonl` mỗi lần chạy**, dùng tên thực
+thể thô mà mô hình đọc được. Nghĩa là mọi việc dọn dẹp làm trực tiếp trên Neo4j đều bị
+xóa sổ ở lần trích xuất kế tiếp.
+
+Đo thật, nạp lại đúng cùng một file hai lần liên tiếp:
+
+| | Node Company | Cạnh tri thức |
+|---|---|---|
+| sau `04 → 09 → 11` | 6.266 | 2.081 |
+| chạy lại mỗi `04` | 6.380 | 3.276 |
+
+Không có lỗi nào báo ra — số liệu chỉ phình lên, và tri thức của một doanh nghiệp bị chia
+cho hai node mang tên khác nhau.
+
+**Hai lớp xử lý, hai mức độ bền khác nhau:**
+
+- `config/entity_merges.json` được áp dụng **ngay trong bước nạp** (`src/graph/curation.py`),
+  nên nó bền qua mọi lần chạy lại. Đây là chỗ nên đưa mọi quyết định đã duyệt vào.
+- `09_resolve_entities.py` gộp thêm ~110 cặp bằng so khớp tự động (`Tesla, Inc` với
+  `Tesla, Inc.`). Những cặp này **không** nằm trong file cấu hình nào nên phải chạy lại
+  sau mỗi lần nạp. Script 04 giờ in cảnh báo nhắc điều đó ở cuối.
+
+### Một hệ quả dây chuyền đáng ghi lại
+
+Script 11 khi gộp có đổi tên node thành tên đẹp trong đồ thị
+(`ARM HOLDINGS PLC /UK` → `Arm Holdings`). Nhưng `triples.jsonl` lại ghi tên nguồn theo
+**tên chính thức của SEC**. Hậu quả ở lần trích xuất kế tiếp: một node MỚI mang tên SEC
+được dựng ra, và toàn bộ tri thức vừa trích treo lên node mới đó thay vì node đã gộp.
+
+Đo được: node `Zoom` (đã gộp, có CIK) chỉ còn **1 cạnh**, trong khi **104 cạnh** vừa trích
+nằm ở node `Zoom Communications, Inc` không có CIK — tức là hỏi "Zoom có quan hệ gì" sẽ
+gần như không ra gì, dù dữ liệu vừa được nạp xong.
+
+Cách sửa: đưa mười cặp tên-SEC ↔ tên-đã-gộp vào bảng alias, để việc quy về một mối xảy ra
+**ngay tại bước nạp**. Sau khi sửa, `Zoom` có 105 cạnh.
+
+---
+
+## Mở rộng sang doanh nghiệp Việt Nam
+
+Giới hạn lớn nhất từng ghi trong tài liệu này là *"không có doanh nghiệp Việt Nam nào
+ngoài VinFast"*. Đó là giới hạn của **nguồn dữ liệu**, không phải của kiến trúc — và
+`src/ingest/vietnam.py` chứng minh điều đó: **30 doanh nghiệp VN30 · 240 bản ghi năm ·
+2018–2025**, dùng lại nguyên vẹn lược đồ Neo4j và bộ công cụ của agent.
+
+```
+FPT   FPT Corporation                      70,1 nghìn tỷ VND (2025)
+HPG   Hoa Phat Group                      156,1 nghìn tỷ VND
+VIC   Vingroup                            331,8 nghìn tỷ VND
+VCB   Vietcombank                          72,5 nghìn tỷ VND
+```
+
+### Vì sao gọi thẳng API thay vì dùng thư viện `vnstock`
+
+Đã thử. Nó chạy, nhưng ba vấn đề:
+
+1. Kéo theo gói **`vnai` — thu thập `machine_id` và gửi ra ngoài.** Dự án bán điểm "chạy
+   hoàn toàn trên máy, không gửi dữ liệu đi đâu"; thêm một gói telemetry là tự mâu thuẫn.
+2. Kéo theo matplotlib, seaborn, wordcloud và nâng cấp numpy — bốn thứ dự án không dùng.
+3. Bản cộng đồng **giới hạn 4 kỳ báo cáo**. Gọi thẳng API lấy được đủ từ 2018.
+
+Dự án vốn đã gọi thẳng API của SEC bằng `httpx`, nên làm y hệt ở đây là nhất quán.
+
+### Ba cái bẫy gặp khi làm
+
+**Ngân hàng có bộ chỉ tiêu hoàn toàn khác.** Báo cáo ngân hàng dùng mã `isb*` thay vì
+`isa*` và bắt đầu từ thu nhập lãi thuần — không có dòng "doanh thu bán hàng" nào. Bỏ qua
+thì **13/30 mã VN30**, tức toàn bộ nhóm ngân hàng, trống trơn phần doanh thu. Đã ánh xạ
+sang "Tổng thu nhập hoạt động" theo quy ước ngành, và gắn thêm trường `revenue_basis` để
+nói rõ đây không cùng khái niệm với doanh thu bán hàng.
+
+**Tên doanh nghiệp không nằm trong báo cáo tài chính.** Bản ghi chỉ có `organCode` và
+`ticker`; tên thật nằm ở endpoint gốc `/company/{mã}`, trường `enOrganName`. Bản đầu tiên
+lấy sai chỗ nên mọi doanh nghiệp vào đồ thị dưới cái tên là chính mã của nó ("ACB",
+"BID") — và vì `upsert` dùng `ON CREATE SET`, chạy lại cũng không sửa được.
+
+**Không được MERGE theo `cik`.** Doanh nghiệp Việt Nam không có CIK, mà trong Neo4j
+`MERGE (c:Company {cik: null})` khớp với **bất kỳ** node nào có cik null — toàn bộ 30
+doanh nghiệp sẽ dồn vào một node, không có lỗi nào báo ra. Ràng buộc duy nhất trên `cik`
+cũng không cứu được vì Neo4j bỏ qua null. Phải có `upsert_vn_companies` MERGE theo mã.
+
+### Va chạm mã giữa hai sàn — không được tự chọn bên nào
+
+Đo được **8/30 mã VN30 trùng mã SEC**, trỏ tới những doanh nghiệp hoàn toàn khác nhau:
+
+| Mã | Việt Nam | Mỹ |
+|---|---|---|
+| `ACB` | Ngân hàng Á Châu | AURORA CANNABIS |
+| `MSN` | Tập đoàn Masan | EMERSON RADIO |
+| `PLX` | Petrolimex | Protalix BioTherapeutics |
+| `MWG` | Thế Giới Di Động | Multi Ways Holdings |
+
+Ưu tiên cứng bên nào cũng tái tạo đúng lỗi vừa mất công sửa: trả về số liệu đầy đủ của
+một doanh nghiệp khác mà không báo gì. Nên khi cả hai cùng khớp, hệ thống trả về
+`ambiguous` kèm cả hai lựa chọn để agent hỏi lại.
+
+Kiểm thử còn làm lộ ra rằng va chạm **không chỉ ở mã**: `GAS` (PV GAS) đụng
+"GAS TRANSPORTER OF THE SOUTH" qua tiền tố tên, `SAB` (Sabeco) đụng "SAB Biotherapeutics".
+
+### Phạm vi: chỉ tầng số liệu
+
+Không làm tầng văn bản và đồ thị cho Việt Nam, có cân nhắc: báo cáo thường niên Việt Nam
+là PDF không có cấu trúc Item cố định, và model nhúng đang dùng (`bge-small-en-v1.5`) chỉ
+hiểu tiếng Anh — muốn tìm theo ý nghĩa trên tiếng Việt phải đổi sang `bge-m3` (1.024
+chiều thay vì 384), tức là nhúng lại toàn bộ 23.869 đoạn vào một collection khác.
+
+```bash
+.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py            # chạy thử
+.venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --apply    # ghi thật
+.venv/Scripts/python.exe tests/test_vietnam.py                         # 23 ca kiểm thử
+```
+
+---
+
+## Nối tầng đồ thị với tầng số liệu
+
+Trước khi dọn, đồ thị tri thức và tầng số liệu là **hai thế giới rời nhau**: node
+"Arm Holdings" (38 cạnh tri thức, không CIK) và node ARM (12 năm số liệu) là hai thực thể
+khác nhau trong cùng một cơ sở dữ liệu. Hỏi quan hệ thì được, hỏi doanh thu thì không.
+
+Đo được **181 node Company không có CIK**. Bộ phân giải đề xuất 27 cặp có thể gộp — nhưng
+đối chiếu với câu văn gốc thì **6 cặp sai hẳn và 2 cặp không đủ chắc**:
+
+| Node | Bộ phân giải đề xuất | Bằng chứng nói gì |
+|---|---|---|
+| `Celestial` | Hain Celestial (thực phẩm hữu cơ) | Marvell mua lại, sản phẩm "Photonic Fabric" → **Celestial AI** |
+| `GF` | New Germany Fund (quỹ đầu tư) | hợp đồng cung ứng wafer với AMD → **GlobalFoundries** |
+| `HPI` | John Hancock Preferred Income Fund | nằm trong danh sách "HPE, HPI, IBM, Lenovo" → **HP Inc.** |
+| `ESMC` | Escalon Medical | "ESMC, công ty con của chúng tôi ở Đức" → **liên doanh của TSMC** |
+
+**Không có luật hình thức nào tách được đúng khỏi sai ở đây.** `IBM → International
+Business Machines` và `GF → New Germany Fund` đều là khớp mã chứng khoán chính xác; khác
+biệt nằm ở ngữ cảnh câu văn. Nên việc gộp phải do người duyệt, và script chỉ gộp những gì
+có trong `config/entity_merges.json` — mỗi dòng kèm căn cứ.
+
+Kết quả: **11 cặp gộp vào doanh nghiệp SEC · 10 biến thể trùng · 13 node nhiễu bị xóa**
+(tổ chức từ thiện trong mục cộng đồng, đại lý chuyển nhượng cổ phiếu, pháp nhân trung
+gian) và 2 vòng tự nối.
+
+Phần lớn 170 node còn lại **không phải nhiễu** mà là doanh nghiệp thật không niêm yết ở
+Mỹ: Samsung Electronics (13 cạnh), Huawei (6), Lenovo, MediaTek, SMIC, Tokyo Electron,
+Bosch, OpenAI. Xóa chúng là phá hủy tri thức thật.
+
+```bash
+.venv/Scripts/python.exe scripts/10_review_graph_entities.py     # duyệt, kèm câu văn gốc
+.venv/Scripts/python.exe scripts/11_merge_graph_entities.py      # chạy thử
+.venv/Scripts/python.exe scripts/11_merge_graph_entities.py --apply
+```
+
+---
+
 ## Kết quả đánh giá
 
 Bộ 37 câu hỏi, model `gemma-4-26b-a4b-qat` chạy local:
@@ -538,8 +700,11 @@ web/static/styles.css       Hệ thiết kế dùng chung: màu, nút, chuyển 
 web/static/chat.css         Riêng cho trang trò chuyện
 web/static/home.js          Hiện dần khi cuộn, đếm số, đổ số liệu thật vào trang
 web/static/chat.js          Đọc SSE, dựng Markdown, gấp dấu vết agent lại
-tests/test_resolver.py      Kiểm thử hồi quy bộ phân giải tên: 16 ca phải từ chối,
-                            30 ca phải vẫn nhận đúng
+src/graph/curation.py       Áp bảng dọn thực thể NGAY TẠI bước nạp (bền qua chạy lại)
+src/ingest/vietnam.py       Tầng số liệu doanh nghiệp Việt Nam, gọi thẳng API VCI
+config/entity_merges.json   Danh sách gộp/xóa node đồ thị — DUYỆT BẰNG TAY
+tests/test_resolver.py      Hồi quy bộ phân giải tên: 16 ca từ chối, 30 ca nhận đúng
+tests/test_vietnam.py       Tầng Việt Nam: nhận đúng, báo nhập nhằng, không lẫn tiền tệ
 run_web.py                  Kiểm tra phụ thuộc rồi khởi động máy chủ
 app/streamlit_app.py        (cũ) Giao diện Streamlit — giữ lại để gỡ lỗi, xem mục Giao diện web
 scripts/                    Các bước chạy, đánh số theo thứ tự
