@@ -20,7 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import settings  # noqa: F401 — chỉnh stdout sang UTF-8 cho Windows
-from src.agent.tools import compare_financials, lookup_financials
+from src.agent.tools import (
+    company_coverage, compare_financials, lookup_financials, search_filings,
+)
 from src.ingest.on_demand import resolve_company
 
 # Mã Việt Nam KHÔNG trùng mã SEC -> phải ra thẳng doanh nghiệp Việt Nam
@@ -165,7 +167,49 @@ def main() -> int:
 
     print()
     print("=" * 78)
-    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1
+    print("NHÓM 5 — mức phủ phải nói đúng TỪNG tầng, không gộp làm một")
+    print("=" * 78)
+    # Sau khi nạp cổ đông, FPT từng hiện tier='graph' kèm text_chunks=0 — thang bậc hứa
+    # "có đồ thị thì có văn bản", còn dữ liệu nói ngược lại. Giờ `tier` chỉ đo hồ sơ SEC,
+    # và quan hệ sở hữu được đếm riêng.
+    fpt = company_coverage(company="FPT")
+    ok_fpt = (fpt.get("tier") == "metrics" and fpt.get("ownership_relations", 0) > 0
+              and fpt.get("knowledge_relations") == 0 and fpt.get("text_chunks") == 0)
+    print(f"  {'đúng' if ok_fpt else 'SAI '}  FPT  tier={fpt.get('tier')} · sở hữu={fpt.get('ownership_relations')}"
+          f" · từ hồ sơ={fpt.get('knowledge_relations')} · 10-K={fpt.get('text_chunks')}")
+    if not ok_fpt:
+        failures.append(f"FPT lẽ ra tier=metrics, có quan hệ sở hữu, không có quan hệ từ hồ sơ: {fpt}")
+    nvda = company_coverage(company="NVDA")
+    ok_nvda = (nvda.get("tier") == "graph" and nvda.get("knowledge_relations", 0) > 0
+               and nvda.get("text_chunks", 0) > 0)
+    print(f"  {'đúng' if ok_nvda else 'SAI '}  NVDA tier={nvda.get('tier')} · từ hồ sơ={nvda.get('knowledge_relations')}"
+          f" · 10-K={nvda.get('text_chunks')}")
+    if not ok_nvda:
+        failures.append(f"NVDA lẽ ra tier=graph, có quan hệ từ hồ sơ và văn bản 10-K: {nvda}")
+
+    print()
+    print("=" * 78)
+    print("NHÓM 6 — mô tả doanh nghiệp Việt Nam: có khi được hỏi, VẮNG khi không")
+    print("=" * 78)
+    fpt_text = search_filings(query="What does the company do?", companies=["FPT"])
+    items = {r.get("item") for r in fpt_text.get("results", [])}
+    ok_prof = (fpt_text.get("status") == "ok" and items == {"PROFILE"}
+               and fpt_text.get("vietnam_note"))
+    print(f"  {'đúng' if ok_prof else 'SAI '}  hỏi về FPT -> {fpt_text.get('status')}, mục {sorted(items)}")
+    if not ok_prof:
+        failures.append("FPT lẽ ra trả về đoạn mô tả PROFILE kèm vietnam_note "
+                        f"(đã chạy scripts/14 chưa?): {str(fpt_text)[:200]}")
+    # Tìm không lọc công ty KHÔNG được lẫn mô tả Việt Nam — đó là lý do chúng nằm ở
+    # collection riêng. Đoạn mô tả ngắn và chung chung dễ vượt mặt đoạn 10-K dài.
+    open_q = search_filings(query="investment in AI infrastructure and data centers")
+    leaked = [r["ticker"] for r in open_q.get("results", []) if str(r.get("ticker", "")).endswith(".VN")]
+    print(f"  {'đúng' if not leaked else 'SAI '}  tìm không lọc -> {len(open_q.get('results', []))} kết quả, "
+          f"{len(leaked)} của Việt Nam")
+    if leaked:
+        failures.append(f"Mô tả Việt Nam lọt vào tìm kiếm không lọc: {leaked}")
+    print()
+    print("=" * 78)
+    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1 + 4
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for item in failures:

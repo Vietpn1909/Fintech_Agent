@@ -213,7 +213,12 @@ def main() -> None:
     # thực sự có tri thức trong đồ thị. Bỏ sót bước này chính là lỗi đã xảy ra: script 05
     # ghi chú "script 04 nâng lên graph" nhưng script 04 không hề gọi, nên Zoom có 105 cạnh
     # mà vẫn mang nhãn 'text' và agent tự khai là mình không có dữ liệu đồ thị về Zoom.
-    upgraded, stale = store.sync_graph_tier()
+    upgraded, corrected, stale = store.sync_graph_tier()
+    if corrected:
+        console.print(
+            f"[dim]Mức phủ: hạ {corrected} doanh nghiệp Việt Nam về 'metrics' — "
+            f"không có hồ sơ SEC thì không thể ở mức 'text' hay 'graph'[/]"
+        )
     console.print(
         f"[dim]Mức phủ: nâng {upgraded} doanh nghiệp lên 'graph' "
         f"(suy ra từ cạnh thật, không gán tay)[/]"

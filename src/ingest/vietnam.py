@@ -37,6 +37,8 @@ ANH chứ không hard-code mã số, và mọi mã tra được đều ghi lại
 
 from __future__ import annotations
 
+import html
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -422,6 +424,35 @@ def fetch_shareholders(symbol: str, min_percent: float = 0.005) -> List[Dict[str
 
     out.sort(key=lambda r: -r["percent"])
     return out
+
+
+def fetch_profile(symbol: str) -> Optional[str]:
+    """Mô tả doanh nghiệp bằng TIẾNG ANH, từ trường `enProfile` của VCI.
+
+    VÌ SAO CHỈ LẤY BẢN TIẾNG ANH
+
+    Model nhúng của dự án (`bge-small-en-v1.5`) chỉ hiểu tiếng Anh. Bản tiếng Việt
+    (`profile`) có sẵn, nhưng nhúng nó bằng model này thì vector gần như ngẫu nhiên — tìm
+    kiếm trả về kết quả trông hợp lệ mà không liên quan. Muốn dùng tiếng Việt phải đổi
+    sang model đa ngữ, kéo theo nhúng lại toàn bộ 23.869 đoạn 10-K — việc đó nằm ngoài
+    phạm vi ở đây.
+
+    PHẢI NÓI RÕ ĐÂY LÀ GÌ
+
+    Đây là đoạn mô tả VCI biên soạn, dài khoảng MỘT đoạn văn (trung vị 850 ký tự trên rổ
+    VN30). Nó trả lời được "doanh nghiệp này làm gì", KHÔNG trả lời được "doanh nghiệp nêu
+    rủi ro gì" — đó là nội dung của báo cáo thường niên, thứ hệ thống chưa có cho Việt Nam.
+
+    Bóc HTML bằng html.unescape chứ không xóa thẳng các thực thể: bản thử đầu xóa
+    "&ocirc;" và làm "Công ty" thành "C ng ty".
+    """
+    data = _get(f"{_BASE}/{symbol.strip().upper()}")
+    raw = (data.get("enProfile") or "").strip() if isinstance(data, dict) else ""
+    if not raw:
+        return None
+    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or None
 
 
 def fetch_company_name(symbol: str) -> str:

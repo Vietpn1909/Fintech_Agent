@@ -45,6 +45,22 @@ MUST_FLAG = [
         "",
         "247.121.000.000",
     ),
+    # Hai ca sai dấu dưới đây là điểm mù của bản đầu: nó so theo độ lớn nên "lãi 18,76
+    # tỷ" và "lỗ 18,76 tỷ" đều được coi là khớp nguồn -18.756.000.000.
+    (
+        "SAI DẤU — nói lãi trong khi nguồn ghi lỗ",
+        "Intel FY2024 lãi ròng 18,76 tỷ USD.",
+        [{"net_income": -18756000000.0}],
+        "",
+        "18,76",
+    ),
+    (
+        "SAI DẤU — không có chữ nào, số dương trần trong khi nguồn ghi lỗ",
+        "Lợi nhuận sau thuế của Intel năm 2024 là 18.756.000.000 USD.",
+        [{"net_income": -18756000000.0}],
+        "",
+        "18.756.000.000",
+    ),
 ]
 
 # ---------------------------------------------------------- KHÔNG ĐƯỢC BÁO
@@ -88,6 +104,46 @@ MUST_PASS = [
         "đổi bậc: nguồn ghi số thô, câu trả lời ghi nghìn tỷ",
         "Doanh thu Petrolimex năm 2024 là 284,0 nghìn tỷ VND.",
         [{"revenue": 284000000000000.0}],
+        "",
+    ),
+    # --- Các ca dưới khóa lại phần đọc dấu: mỗi ca là một cách viết "lỗ" đúng ---
+    (
+        "lỗ nói bằng chữ, không có dấu trừ",
+        "Intel ghi nhận khoản lỗ ròng 18,76 tỷ USD trong năm 2024.",
+        [{"net_income": -18756000000.0}],
+        "",
+    ),
+    (
+        "lỗ ghi trong ngoặc SAU con số",
+        "Lợi nhuận sau thuế FY2024: 18,76 tỷ USD (lỗ).",
+        [{"net_income": -18756000000.0}],
+        "",
+    ),
+    (
+        "từ gần nhất thắng: 'chuyển từ lỗ sang lãi' là lãi",
+        "Công ty chuyển từ lỗ sang lãi 5,2 tỷ USD năm 2024.",
+        [{"net_income": 5200000000.0}],
+        "",
+    ),
+    (
+        "một câu nói cả lãi lẫn lỗ cho hai doanh nghiệp khác nhau",
+        "Apple lãi 93,74 tỷ USD, trong khi Intel lỗ 18,76 tỷ USD.",
+        [{"net_income": 93736000000.0}, {"net_income": -18756000000.0}],
+        "",
+    ),
+    (
+        # Văn xuôi 10-K viết "a net loss of $18.8 billion" với con số dương. Số từ văn xuôi
+        # phải được coi là không rõ dấu, nếu không thì mọi câu trả lời định tính đều bị
+        # báo sai dấu.
+        "nguồn văn xuôi không rõ dấu — không được so dấu",
+        "Intel cho biết mức lỗ là 18,8 tỷ USD.",
+        ["The company reported a net loss of $18.8 billion for the year."],
+        "",
+    ),
+    (
+        "dấu gạch nối là KHOẢNG giá trị, không phải số âm",
+        "Doanh thu dự kiến 150-200 tỷ USD.",
+        [{"low": 150000000000.0, "high": 200000000000.0}],
         "",
     ),
 ]

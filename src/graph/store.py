@@ -28,7 +28,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from neo4j import GraphDatabase
 
 from config.settings import settings
-from src.graph.schema import INFRA_RELATIONS, QUERYABLE_RELATIONS, RELATION_NAMES
+from src.graph.schema import (
+    INFRA_RELATIONS, QUERYABLE_RELATIONS, RELATION_NAMES, STRUCTURED_RELATIONS,
+)
 
 
 class GraphStore:
@@ -299,8 +301,8 @@ class GraphStore:
             )
         return len(rows)
 
-    def sync_graph_tier(self) -> Tuple[int, int]:
-        """Đặt mức phủ 'graph' theo ĐÚNG những gì đồ thị đang có. Trả về (nâng, khai khống).
+    def sync_graph_tier(self) -> Tuple[int, int, int]:
+        """Đặt mức phủ 'graph' theo ĐÚNG những gì đồ thị đang có. Trả về (nâng, hạ, khai khống).
 
         ⚠️ Hàm này tồn tại vì mức 'graph' trước đây KHÔNG AI GÁN CẢ.
 
@@ -318,38 +320,66 @@ class GraphStore:
         Chỉ xét node CÓ ticker. Bước trích xuất đẻ ra hàng trăm node như "Samsung
         Electronics" hay "OpenAI" — chúng có cạnh tri thức nhưng không nằm trong vũ trụ SEC,
         không có số liệu, nên đếm chúng vào mức phủ là thổi phồng con số.
+
+        MỨC PHỦ CHỈ ĐO HỒ SƠ SEC — KHÔNG ĐO QUAN HỆ SỞ HỮU.
+
+        Thang bậc metrics < text < graph ngầm hứa mức cao chứa mức thấp: 'graph' nghĩa là
+        đã trích quan hệ TỪ văn bản 10-K, nên đương nhiên phải có văn bản. Bản trước đếm cả
+        cạnh OWNED_BY, nên sau khi nạp cổ đông, 1.524 doanh nghiệp Việt Nam lên 'graph' —
+        trong khi chúng không có một đoạn văn bản nào. `company_coverage("FPT")` trả về
+        tier='graph' kèm text_chunks=0: một lời hứa tự mâu thuẫn.
+
+        Nên cạnh có cấu trúc (STRUCTURED_RELATIONS) không tính vào mức phủ, và được báo
+        riêng trong `company_coverage`. Doanh nghiệp KHÔNG có CIK thì không thể có hồ sơ
+        SEC, nên mức phủ của nó chỉ có thể là 'metrics'. Đó là suy luận chắc chắn chứ
+        không phải đoán, nên ở đây được phép hạ cấp — khác với chiều hạ cấp bị cấm ở dưới.
         """
+        # Hạ về 'metrics' những doanh nghiệp Việt Nam đã lỡ được nâng vì cạnh sở hữu.
+        corrected = self.run(
+            """
+            MATCH (c:Company)
+            WHERE c.market = 'VN' AND c.cik IS NULL
+              AND coalesce(c.tier, 'metrics') <> 'metrics'
+            SET c.tier = 'metrics'
+            RETURN count(c) AS n
+            """
+        )
+
         upgraded = self.run(
             """
             MATCH (c:Company)
-            WHERE c.ticker IS NOT NULL AND coalesce(c.tier, 'metrics') <> 'graph'
-            OPTIONAL MATCH (c)-[r]-() WHERE NOT type(r) IN $infra
+            WHERE c.ticker IS NOT NULL AND c.cik IS NOT NULL
+              AND coalesce(c.tier, 'metrics') <> 'graph'
+            OPTIONAL MATCH (c)-[r]-()
+              WHERE NOT type(r) IN $infra AND NOT type(r) IN $structured
             WITH c, count(r) AS n
             WHERE n > 0
             SET c.tier = 'graph'
             RETURN count(c) AS n
             """,
-            infra=INFRA_RELATIONS,
+            infra=INFRA_RELATIONS, structured=STRUCTURED_RELATIONS,
         )
 
-        # Chiều ngược lại: mang nhãn 'graph' mà không còn cạnh tri thức nào. Xảy ra khi
-        # bảng dọn ở config/entity_merges.json bỏ hết cạnh của một doanh nghiệp. Ở đây chỉ
-        # BÁO chứ không tự hạ cấp: hạ xuống mức nào là câu hỏi không trả lời được từ Neo4j
-        # (còn văn bản trong Qdrant hay không thì đồ thị không biết), mà đoán sai lại tạo ra
+        # Chiều ngược lại: mang nhãn 'graph' mà không còn cạnh trích từ hồ sơ nào. Xảy ra
+        # khi bảng dọn ở config/entity_merges.json bỏ hết cạnh của một doanh nghiệp. Ở đây
+        # chỉ BÁO chứ không tự hạ cấp: hạ xuống 'text' hay 'metrics' tùy vào việc còn văn
+        # bản trong Qdrant hay không, mà đồ thị không biết điều đó — đoán sai lại tạo ra
         # đúng cái lỗi báo thiếu năng lực mà hàm này đang đi sửa.
         stale = self.run(
             """
             MATCH (c:Company) WHERE c.tier = 'graph'
-            OPTIONAL MATCH (c)-[r]-() WHERE NOT type(r) IN $infra
+            OPTIONAL MATCH (c)-[r]-()
+              WHERE NOT type(r) IN $infra AND NOT type(r) IN $structured
             WITH c, count(r) AS n
             WHERE n = 0
             RETURN count(c) AS n
             """,
-            infra=INFRA_RELATIONS,
+            infra=INFRA_RELATIONS, structured=STRUCTURED_RELATIONS,
         )
 
         return (
             upgraded[0]["n"] if upgraded else 0,
+            corrected[0]["n"] if corrected else 0,
             stale[0]["n"] if stale else 0,
         )
 

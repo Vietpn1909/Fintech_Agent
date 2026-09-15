@@ -111,10 +111,18 @@ Bước này là mã lệnh thuần, nên nó không hỏng theo cách khâu vi�
       1 câu có số sai ở lần viết đầu -> viết lại -> sạch
       0 cảnh báo gắn nhầm
 
-Kiểm thử ở `tests/test_verify.py` khoá cả hai chiều: ba ca **phải bắt** (chép sai, sai bậc,
-bịa thêm dòng) và sáu ca **không được báo** (số làm tròn, số âm, ngưỡng nhắc lại từ câu
-hỏi, nguồn tiếng Anh "$17.7 billion" đối chiếu với "17,7 tỷ USD"…). Sáu ca sau đều lấy từ
-những lần báo nhầm CÓ THẬT khi chạy trên dữ liệu thật, không phải ca giả định.
+Bộ đối chiếu bắt hai loại lỗi: con số **không có nguồn**, và con số **sai dấu** — độ lớn
+khớp nhưng câu trả lời nói lãi trong khi nguồn ghi lỗ. Dấu được đọc từ chữ quanh con số
+(dấu trừ đứng sát, "lỗ"/"âm" đứng trước trong cùng câu, "(lỗ)" ngay sau), và chỉ đem so
+với số lấy từ dữ liệu có cấu trúc. Số đọc từ văn xuôi 10-K được coi là không rõ dấu, vì
+10-K viết "a net loss of $18.8 billion" với con số dương.
+
+Kiểm thử ở `tests/test_verify.py` khoá cả hai chiều: năm ca **phải bắt** (chép sai, sai
+bậc, bịa thêm dòng, hai kiểu sai dấu) và mười hai ca **không được báo** (số làm tròn, số
+âm, ngưỡng nhắc lại từ câu hỏi, nguồn tiếng Anh "$17.7 billion" đối chiếu với "17,7 tỷ
+USD", "chuyển từ lỗ sang lãi", khoảng giá trị "150-200 tỷ"…). Sáu ca "không được báo" đầu
+tiên lấy từ những lần báo nhầm CÓ THẬT khi chạy trên dữ liệu thật; sáu ca sau khoá phần
+đọc dấu.
 
 ---
 
@@ -162,6 +170,7 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 # --- Tầng số liệu Việt Nam (không cần LM Studio) ---
 .venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --resume --apply      # 1.532 mã · ~37 phút
 .venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py --resume --apply # cổ đông · ~9 phút
+.venv/Scripts/python.exe scripts/14_load_vietnam_profiles.py --resume --apply     # mô tả DN · ~11 phút
 
 # --- Đánh giá ---
 .venv/Scripts/python.exe scripts/07_build_testset.py                 # sinh 34 câu hỏi
@@ -502,6 +511,11 @@ Kèm theo là **10.701 cạnh sở hữu** (`OWNED_BY`) lấy từ bảng cổ �
 Nam, dựng xong trong 9 phút và **không tốn một lần gọi LLM nào**. Chi tiết và bốn lỗi âm
 thầm phát hiện trong lúc làm nằm ở `docs/nguon_du_lieu_viet_nam.md`.
 
+Mỗi doanh nghiệp còn có **một đoạn mô tả tiếng Anh** do VCI biên soạn (1.527/1.532 mã),
+nằm ở một collection Qdrant riêng để không chen vào kết quả tìm kiếm 10-K. Nó đủ để trả lời
+*"doanh nghiệp này làm gì"*, **không** đủ để trả lời *"doanh nghiệp nêu rủi ro gì"* — báo
+cáo thường niên Việt Nam vẫn chưa có trong hệ thống.
+
 ```
 FPT   FPT Corporation                      70,1 nghìn tỷ VND (2025)
 HPG   Hoa Phat Group                      156,1 nghìn tỷ VND
@@ -570,6 +584,7 @@ chiều thay vì 384), tức là nhúng lại toàn bộ 23.869 đoạn vào m�
 # Tầng đồ thị cho Việt Nam: quan hệ sở hữu, 0 lần gọi LLM
 .venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py                  # chạy thử
 .venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py --resume --apply # ghi thật
+.venv/Scripts/python.exe scripts/14_load_vietnam_profiles.py --resume --apply     # mô tả DN · ~11 phút
 .venv/Scripts/python.exe tests/test_vietnam.py                         # 23 ca kiểm thử
 ```
 

@@ -258,7 +258,12 @@ def main() -> None:
 
     store.init_schema()
     store.upsert_shareholders(rows)
-    upgraded, stale = store.sync_graph_tier()
+    upgraded, corrected, stale = store.sync_graph_tier()
+    if corrected:
+        console.print(
+            f"[dim]Mức phủ: hạ {corrected} doanh nghiệp Việt Nam về 'metrics' — "
+            f"không có hồ sơ SEC thì không thể ở mức 'text' hay 'graph'[/]"
+        )
 
     after = counts()
     console.print(f"[bold]Sau:[/]   {after}")

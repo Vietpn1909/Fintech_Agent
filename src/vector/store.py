@@ -70,6 +70,17 @@ class Embedder:
         return next(iter(self.model.embed([prefixed]))).tolist()
 
 
+# Collection RIÊNG cho mô tả doanh nghiệp Việt Nam, không trộn vào kho 10-K.
+#
+# Vì sao tách: tìm kiếm không lọc theo công ty ("doanh nghiệp nào đầu tư vào hạ tầng AI")
+# chạy trên toàn bộ kho. Đoạn mô tả VCI ngắn và chung chung ("X là tập đoàn công nghệ tập
+# trung vào AI, điện toán đám mây…"), nên về độ tương đồng nó dễ vượt mặt một đoạn 10-K
+# dài và cụ thể — tức là 1.532 đoạn mô tả sẽ chen vào kết quả của những câu hỏi đang trả
+# lời đúng. Để riêng thì kho 10-K không đổi một điểm nào, và mô tả chỉ được đọc khi câu
+# hỏi nêu đích danh một doanh nghiệp Việt Nam.
+VN_PROFILE_COLLECTION = f"{settings.qdrant_collection}_vn_profiles"
+
+
 class VectorStore:
     def __init__(self, collection: Optional[str] = None):
         self.collection = collection or settings.qdrant_collection
@@ -96,6 +107,30 @@ class VectorStore:
             self.client.create_payload_index(
                 collection_name=self.collection, field_name=field, field_schema=schema
             )
+
+    def ensure_collection(self) -> None:
+        """Tạo collection nếu CHƯA có. Không bao giờ xóa dữ liệu đang có.
+
+        `recreate()` xóa sạch rồi tạo lại. Gọi nhầm nó lên collection chính là mất 23.869
+        đoạn 10-K đã nhúng — vài giờ CPU. Collection phụ (mô tả doanh nghiệp Việt Nam) cần
+        được tạo lần đầu mà không có rủi ro đó.
+        """
+        existing = {c.name for c in self.client.get_collections().collections}
+        if self.collection not in existing:
+            self.recreate()
+
+    def count_for(self, ticker: str) -> int:
+        """Số điểm của một mã trong collection này. Collection chưa tồn tại thì trả 0."""
+        try:
+            return self.client.count(
+                collection_name=self.collection,
+                count_filter=qm.Filter(
+                    must=[qm.FieldCondition(key="ticker", match=qm.MatchValue(value=ticker))]
+                ),
+                exact=True,
+            ).count
+        except Exception:  # noqa: BLE001 — collection chưa tạo nghĩa là 0 điểm
+            return 0
 
     def upsert_chunks(self, chunks: List[Chunk], batch_size: int = 256) -> int:
         """Nhúng và ghi các chunk vào Qdrant.

@@ -285,7 +285,12 @@ def main() -> None:
     # về node ZM. Nếu chỉ đồng bộ trong script 04 (chạy TRƯỚC 09 và 11) thì mọi doanh
     # nghiệp lên mức 'graph' nhờ bước gộp đều bị bỏ sót — đúng cái đã xảy ra với ZM, CTSH,
     # SWKS, GE, ERIC. Đây là bước cuối của pipeline nên nó thấy đồ thị ở trạng thái thật.
-    upgraded, stale = store.sync_graph_tier()
+    upgraded, corrected, stale = store.sync_graph_tier()
+    if corrected:
+        console.print(
+            f"[dim]Mức phủ: hạ {corrected} doanh nghiệp Việt Nam về 'metrics' — "
+            f"không có hồ sơ SEC thì không thể ở mức 'text' hay 'graph'[/]"
+        )
     if upgraded:
         console.print(f"  đã nâng {upgraded} doanh nghiệp lên mức phủ 'graph'")
     if stale:

@@ -45,7 +45,7 @@ from langgraph.graph import END, START, StateGraph
 
 from config.settings import settings
 from src.agent import tools
-from src.agent.verify import check_answer, warning_block
+from src.agent.verify import check_answer, retry_instruction, warning_block
 from src.ingest.xbrl import METRIC_LABELS
 from src.llm.client import chat, chat_json, chat_stream
 
@@ -79,7 +79,10 @@ TOOL_SPECS = {
                  "currency": "str optional — 'USD' (default) or 'VND' for Vietnam"},
     },
     "search_filings": {
-        "desc": "Semantic search over 10-K text. Use for qualitative questions: strategy, risks, competition, what management said.",
+        "desc": ("Semantic search over 10-K text. Use for qualitative questions: strategy, "
+                 "risks, competition, what management said. For a VIETNAMESE company it only "
+                 "returns a short company PROFILE (what the business does): there are no "
+                 "Vietnamese annual reports, so it cannot answer risk or strategy questions."),
         "args": {
             "query": "str — search in ENGLISH, the filings are English",
             "companies": "list[str] optional",
@@ -102,7 +105,9 @@ TOOL_SPECS = {
         "args": {"source": "str", "target": "str"},
     },
     "company_coverage": {
-        "desc": "Check what data the system actually has about a company. Use when unsure whether a company is indexed.",
+        "desc": ("Check what data the system actually has about a company: years of "
+                 "financials, 10-K text chunks, relations extracted from filings, ownership "
+                 "relations and a Vietnamese company profile. Read the counts, not just `tier`."),
         "args": {"company": "str"},
     },
 }
@@ -214,6 +219,10 @@ Quy tắc bắt buộc:
    hai trong danh mục) — TUYỆT ĐỐI không được diễn giải thành hợp tác, cung ứng, cạnh
    tranh hay bất kỳ quan hệ làm ăn nào. Phải nói rõ đó là quan hệ sở hữu, kèm tỷ lệ và
    ngày công bố nếu có.
+4d. Kết quả `search_filings` có `item` = "PROFILE" là ĐOẠN MÔ TẢ DOANH NGHIỆP do VCI biên
+   soạn, KHÔNG phải trích từ báo cáo thường niên. Chỉ dùng nó để nói doanh nghiệp làm gì.
+   Nếu người dùng hỏi về rủi ro, chiến lược hay ban lãnh đạo nói gì của một doanh nghiệp
+   Việt Nam, phải nói thẳng: hệ thống chưa có báo cáo thường niên của doanh nghiệp đó.
 5. Nếu hệ thống vừa tự đi lấy dữ liệu (trường just_ingested), hãy nói với người dùng.
 6. Không đưa ra khuyến nghị mua/bán. Chỉ trình bày dữ kiện và phân tích.
 
@@ -546,13 +555,10 @@ def node_answer(state: AgentState) -> AgentState:
     retried = False
     if not check["ok"] and not callable(on_token):
         retried = True
-        offenders = ", ".join(item["text"] for item in check["unverified"][:8])
         messages.append({"role": "assistant", "content": answer})
-        messages.append({"role": "user", "content":
-            f"Các số sau trong câu trả lời KHÔNG có trong dữ liệu công cụ trả về: {offenders}.\n"
-            "Viết lại câu trả lời và CHỈ dùng những con số có thật trong dữ liệu ở trên. "
-            "Không thêm doanh nghiệp nào ngoài danh sách công cụ đã trả về. "
-            "Không suy ra, không nhớ lại, không làm tròn sang bậc độ lớn khác."})
+        # Lời nhắc tách riêng hai loại lỗi: "không có nguồn" và "sai dấu" cần được chữa
+        # khác nhau, gộp chung thì mô hình không biết mình sai ở đâu.
+        messages.append({"role": "user", "content": retry_instruction(check)})
         answer = chat(messages, **common)
         check = check_answer(answer, observations, state.get("question", ""))
 

@@ -24,11 +24,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from src.graph.schema import QUERYABLE_RELATIONS
+from src.graph.schema import INFRA_RELATIONS, QUERYABLE_RELATIONS, STRUCTURED_RELATIONS
 from src.graph.store import GraphStore
 from src.ingest.on_demand import ensure_text_available, is_text_indexed, resolve_company
 from src.ingest.xbrl import METRIC_LABELS
-from src.vector.store import VectorStore
+from src.vector.store import VN_PROFILE_COLLECTION, VectorStore
 
 # Câu nhắc gửi kèm mọi kết quả "không tìm thấy doanh nghiệp".
 #
@@ -47,6 +47,7 @@ _OPERATORS = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "eq": "="}
 
 _graph: Optional[GraphStore] = None
 _vectors: Optional[VectorStore] = None
+_profiles: Optional[VectorStore] = None
 
 
 def graph() -> GraphStore:
@@ -61,6 +62,16 @@ def vectors() -> VectorStore:
     if _vectors is None:
         _vectors = VectorStore()
     return _vectors
+
+
+def profiles() -> VectorStore:
+    """Kho mô tả doanh nghiệp Việt Nam — collection riêng, xem VN_PROFILE_COLLECTION."""
+    global _profiles
+    if _profiles is None:
+        _profiles = VectorStore(collection=VN_PROFILE_COLLECTION)
+        # Dùng chung bộ nhúng với kho 10-K: cùng một model, nạp hai lần chỉ tốn RAM.
+        _profiles.embedder = vectors().embedder
+    return _profiles
 
 
 # --------------------------------------------------------------------- tra cứu số liệu
@@ -368,7 +379,8 @@ def search_filings(
                 continue
             ticker = r["best"]["ticker"]
             tickers.append(ticker)
-            if auto_ingest and is_text_indexed(ticker, vectors()) == 0:
+            # Doanh nghiệp Việt Nam không có hồ sơ SEC để đi lấy — gọi thử chỉ tốn thời gian.
+            if auto_ingest and not ticker.endswith(".VN") and is_text_indexed(ticker, vectors()) == 0:
                 result = ensure_text_available(ticker)
                 if result.get("status") == "indexed":
                     ingested.append(
@@ -396,24 +408,49 @@ def search_filings(
                 "results": [],
             }
 
-    hits = vectors().search(query, top_k=top_k, tickers=tickers, items=items, years=years)
+    # ⚠️ DOANH NGHIỆP VIỆT NAM KHÔNG CÓ VĂN BẢN 10-K — TÌM PHẦN CỦA HỌ Ở KHO MÔ TẢ RIÊNG.
+    #
+    # Trước đây mã .VN đi thẳng vào bộ lọc của kho 10-K, không khớp đoạn nào, rồi còn
+    # kích hoạt hai lượt nới bộ lọc vô ích trước khi trả về no_hits. Tách ra: mã Mỹ tìm
+    # trong kho 10-K như cũ, mã Việt Nam tìm trong kho mô tả (scripts/14).
+    vn_tickers = [t for t in (tickers or []) if t.endswith(".VN")]
+    sec_tickers = [t for t in (tickers or []) if not t.endswith(".VN")]
+    search_sec = tickers is None or bool(sec_tickers)
+    tickers = sec_tickers if tickers is not None else None
+
+    hits = (
+        vectors().search(query, top_k=top_k, tickers=tickers, items=items, years=years)
+        if search_sec else []
+    )
 
     # Không có kết quả mà đang bật bộ lọc -> nới dần thay vì đầu hàng.
     # Thứ tự nới: bỏ năm trước (dễ sai nhất vì năm tài chính lệch năm dương lịch),
     # rồi bỏ mục, cuối cùng chỉ giữ lọc theo công ty.
     relaxed = None
-    if not hits and (items or years):
+    if search_sec and not hits and (items or years):
         hits = vectors().search(query, top_k=top_k, tickers=tickers, items=items)
         relaxed = "đã bỏ lọc theo năm"
-    if not hits and items:
+    if search_sec and not hits and items:
         hits = vectors().search(query, top_k=top_k, tickers=tickers)
         relaxed = "đã bỏ lọc theo mục và năm"
 
+    profile_hits: List[Dict[str, Any]] = []
+    if vn_tickers:
+        try:
+            profile_hits = profiles().search(query, top_k=min(top_k, 3), tickers=vn_tickers)
+        except Exception:  # noqa: BLE001 — chưa chạy scripts/14 thì kho mô tả chưa tồn tại
+            profile_hits = []
+
     return {
-        "status": "ok" if hits else "no_hits",
+        "status": "ok" if (hits or profile_hits) else "no_hits",
         "query": query,
         "relaxed_filter": relaxed,  # agent phải nói rõ nếu điều kiện đã bị nới
         "just_ingested": ingested,  # để agent nói thật là nó vừa đi lấy dữ liệu
+        "vietnam_note": (
+            "Doanh nghiệp Việt Nam KHÔNG có báo cáo thường niên trong hệ thống. Kết quả của "
+            "họ (nếu có) chỉ là đoạn mô tả do VCI biên soạn — không nói gì về rủi ro hay "
+            "chiến lược do doanh nghiệp tự công bố."
+        ) if vn_tickers else None,
         "results": [
             {
                 "ticker": h["ticker"], "company": h["company"],
@@ -422,6 +459,15 @@ def search_filings(
                 "text": h["text"], "chunk_id": h["chunk_id"],
             }
             for h in hits
+        ] + [
+            {
+                "ticker": h["ticker"], "company": h["company"],
+                "fiscal_year": None, "item": "PROFILE",
+                "item_title": h["item_title"], "score": round(h["score"], 3),
+                "text": h["text"], "chunk_id": h["chunk_id"],
+                "source_note": "Mô tả doanh nghiệp do VCI biên soạn, KHÔNG phải trích báo cáo.",
+            }
+            for h in profile_hits
         ],
     }
 
@@ -556,29 +602,74 @@ def graph_path(source: str, target: str, max_hops: int = 3) -> Dict[str, Any]:
 
 
 def company_coverage(company: str) -> Dict[str, Any]:
-    """Cho biết hệ thống đang có gì về một doanh nghiệp — để agent nói thật với người dùng."""
+    """Cho biết hệ thống đang có gì về một doanh nghiệp — để agent nói thật với người dùng.
+
+    ⚠️ ĐỌC CÁC CON SỐ, ĐỪNG CHỈ ĐỌC `tier`.
+
+    `tier` là thang bậc metrics < text < graph đo độ phủ HỒ SƠ SEC. Nó không nói gì về
+    quan hệ sở hữu hay mô tả doanh nghiệp Việt Nam — hai thứ không phải hồ sơ. Bản trước
+    chỉ trả `tier` kèm `text_chunks`, và sau khi nạp cổ đông FPT hiện ra tier='graph' với
+    text_chunks=0: agent có lý do để tưởng tìm văn bản FPT sẽ ra kết quả.
+
+    Giờ mỗi tầng một con số riêng, cộng một bản tóm tắt bằng lời để agent nhắc lại cho
+    người dùng mà không phải tự diễn giải.
+    """
     resolved = resolve_company(company)
     if resolved["status"] != "ok":
         return _resolution_failure(company, resolved)
 
     best = resolved["best"]
+    ticker = best["ticker"]
     cands = [best] + resolved.get("alternatives", [])
     rows = graph().run(
         """
         MATCH (c:Company {ticker: $ticker})
         OPTIONAL MATCH (c)-[:HAS_FINANCIALS]->(fy:FinancialYear)
-        RETURN c.tier AS tier, count(fy) AS years,
-               min(fy.fiscal_year) AS first_year, max(fy.fiscal_year) AS last_year
+        WITH c, count(fy) AS years,
+             min(fy.fiscal_year) AS first_year, max(fy.fiscal_year) AS last_year
+        OPTIONAL MATCH (c)-[k]-()
+          WHERE NOT type(k) IN $infra AND NOT type(k) IN $structured
+        WITH c, years, first_year, last_year, count(k) AS knowledge
+        OPTIONAL MATCH (c)-[o:OWNED_BY]-()
+        RETURN c.tier AS tier, years, first_year, last_year, knowledge,
+               count(o) AS ownership
         """,
-        ticker=best["ticker"],
+        ticker=ticker, infra=INFRA_RELATIONS, structured=STRUCTURED_RELATIONS,
     )
     info = rows[0] if rows else {}
+    years = info.get("years") or 0
+    knowledge = info.get("knowledge") or 0
+    ownership = info.get("ownership") or 0
+    first, last = info.get("first_year"), info.get("last_year")
+    text_chunks = is_text_indexed(ticker, vectors())
+    is_vn = ticker.endswith(".VN")
+    profile_chunks = profiles().count_for(ticker) if is_vn else 0
+
+    summary = [
+        f"số liệu tài chính: {years} năm ({first}–{last})" if years
+        else "chưa có số liệu tài chính",
+        f"văn bản báo cáo thường niên (10-K): {text_chunks} đoạn" if text_chunks
+        else "CHƯA có văn bản báo cáo thường niên",
+        f"quan hệ trích từ hồ sơ: {knowledge}" if knowledge
+        else "chưa có quan hệ trích từ hồ sơ",
+    ]
+    if ownership:
+        summary.append(f"quan hệ sở hữu (cổ đông): {ownership} — KHÔNG phải quan hệ kinh doanh")
+    if is_vn:
+        summary.append("mô tả doanh nghiệp do VCI biên soạn: có" if profile_chunks
+                       else "chưa có mô tả doanh nghiệp")
+
     return {
         "status": "ok",
-        "ticker": best["ticker"], "company": best["name"],
+        "ticker": ticker, "company": best["name"],
         "tier": info.get("tier", "chưa có trong đồ thị"),
-        "financial_years": info.get("years", 0),
-        "year_range": [info.get("first_year"), info.get("last_year")],
-        "text_chunks": is_text_indexed(best["ticker"], vectors()),
+        "tier_meaning": "độ phủ HỒ SƠ SEC: metrics < text < graph — không tính quan hệ sở hữu",
+        "financial_years": years,
+        "year_range": [first, last],
+        "text_chunks": text_chunks,
+        "knowledge_relations": knowledge,
+        "ownership_relations": ownership,
+        "profile_chunks": profile_chunks,
+        "summary": summary,
         "alternatives": [{"ticker": c["ticker"], "name": c["name"]} for c in cands[1:4]],
     }

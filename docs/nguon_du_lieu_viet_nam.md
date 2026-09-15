@@ -214,3 +214,55 @@ vào A vì nó gần như miễn phí (đã nằm trong cùng lần gọi API).
 - Mọi endpoint VCI cần header `Referer: https://iq.vietcap.com.vn/`, thiếu thì bị chặn.
 - Không gửi thông tin liên hệ cá nhân tới các API Việt Nam. `SEC_USER_AGENT` chỉ dùng cho
   SEC, vì chính sách Fair Access của SEC bắt buộc; VCI không yêu cầu và không được nhận.
+
+## Cập nhật 2026-09-15 — ba chỗ hở còn lại sau lần rà soát
+
+### Đường C, phần làm được ngay: mô tả doanh nghiệp bằng tiếng Anh
+
+Tầng văn bản đầy đủ (báo cáo thường niên) vẫn là dự án riêng, lý do như ở trên. Nhưng
+`enProfile` của VCI là tiếng Anh, nên nhúng được bằng đúng model hiện tại mà không đụng
+tới kho 10-K (`scripts/14_load_vietnam_profiles.py`):
+
+```
+1.527 / 1.532 doanh nghiệp có mô tả · ngắn nhất 248 · trung vị 749 · dài nhất 1.501 ký tự
+lấy trong 8,9 phút · 0 mã lỗi · kho 10-K giữ nguyên 23.869 đoạn
+```
+
+Nó trả lời được *"FPT làm gì"*, **không** trả lời được *"FPT nêu rủi ro gì"*. Ba lớp để
+không bị hiểu nhầm thành nội dung báo cáo:
+
+- **Collection riêng** (`sec_filings_vn_profiles`). Tìm kiếm không lọc công ty không bao
+  giờ chạm tới nó — đoạn mô tả ngắn và chung chung dễ vượt mặt đoạn 10-K dài về độ tương
+  đồng, trộn chung là làm lệch kết quả của những câu hỏi đang trả lời đúng.
+- `item = "PROFILE"`, kèm `source_note` trên từng kết quả và `vietnam_note` trên cả lượt tìm.
+- Quy tắc 4d trong prompt trả lời: chỉ dùng để nói doanh nghiệp làm gì; hỏi rủi ro hay
+  chiến lược thì phải nói thẳng là chưa có báo cáo thường niên.
+
+### Mức phủ `tier` giờ chỉ đo hồ sơ SEC
+
+Sau khi nạp cổ đông, 1.524 doanh nghiệp Việt Nam lên `tier='graph'` trong khi không có một
+đoạn văn bản nào. Thang bậc metrics < text < graph hứa *"có đồ thị thì có văn bản"*, còn dữ
+liệu nói ngược lại — `company_coverage("FPT")` trả `tier='graph'` kèm `text_chunks=0`.
+
+Giờ cạnh `OWNED_BY` không tính vào mức phủ, và `company_coverage` trả riêng từng con số
+(năm số liệu, đoạn 10-K, quan hệ trích từ hồ sơ, quan hệ sở hữu, mô tả) kèm một bản tóm
+tắt bằng lời để agent nhắc lại cho người dùng.
+
+```
+tier='graph'    1.619 -> 95    đúng bằng số doanh nghiệp có quan hệ trích từ hồ sơ
+Việt Nam        1.532 doanh nghiệp về 'metrics'
+Deutsche Bank   từng lên 'graph' chỉ vì là cổ đông của IJC và DRC -> về 'metrics'
+chạy lại lần 2  nâng 0 · hạ 0 · khai khống 0
+```
+
+### Bộ đối chiếu số giờ bắt được sai dấu
+
+Bản đầu so theo độ lớn, bỏ qua dấu, để khỏi báo nhầm câu trả lời đúng "Intel lỗ
+-18.756.000.000". Cái giá là mù dấu: "Intel lãi 18,76 tỷ" cũng được coi là khớp nguồn.
+Giờ dấu được đọc từ chữ quanh con số — dấu trừ đứng sát, "lỗ"/"âm" đứng trước trong cùng
+câu (từ gần nhất thắng, để "chuyển từ lỗ sang lãi 5,2 tỷ" là lãi), "(lỗ)" ngay sau — và chỉ
+đem so với số từ dữ liệu có cấu trúc. Số đọc từ văn xuôi 10-K được coi là không rõ dấu,
+vì 10-K viết "a net loss of $18.8 billion" với con số dương.
+
+`tests/test_verify.py`: 5 ca phải bắt, 12 ca không được báo.
+
