@@ -69,6 +69,10 @@ NAME_SUFFIXES = ("", "_1", "_2")
 MIN_PAGES = 30
 MIN_PROSE_CHARS = 50_000
 
+# Dưới ngưỡng này thì dù OCR ra chữ cũng vẫn không phải báo cáo thường niên — đó là
+# công văn công bố thông tin. Dùng để phân biệt "cần OCR" với "phải tìm nguồn khác".
+LETTER_PAGES = 10
+
 # Trang có tỷ lệ chữ số cao là bảng báo cáo tài chính. Bỏ chúng đi vì hai lý do: chúng
 # không phải văn xuôi để tìm theo ý nghĩa, và quan trọng hơn — dự án lấy số từ XBRL/VCI
 # chứ không cho mô hình đọc số từ văn bản. Đưa bảng số vào kho văn bản là mở đúng cái
@@ -97,8 +101,25 @@ def _throttle(min_gap: float = 0.4) -> None:
 
 def report_url(symbol: str, exchange: str, year: int, suffix: str = "") -> str:
     folder = EXCHANGE_FOLDER.get((exchange or "HOSE").upper(), "HOSE")
+    return _url(symbol, folder, year, suffix)
+
+
+def _url(symbol: str, folder: str, year: int, suffix: str = "") -> str:
     return (f"{STATIC_BASE}/{folder}/{year}/BCTN/VN/"
             f"{symbol.upper()}_Baocaothuongnien_{year}{suffix}.pdf")
+
+
+def _folders(exchange: str) -> List[str]:
+    """Sàn hiện tại trước, rồi tới các sàn còn lại.
+
+    File nằm ở thư mục của sàn TẠI THỜI ĐIỂM công bố, không phải sàn hôm nay. Nhiều ngân
+    hàng niêm yết ở HNX rồi mới chuyển sang HOSE quanh 2020–2021, nên báo cáo 2019–2020
+    của họ nằm ở `HNX/` trong khi đồ thị ghi sàn hiện tại là HSX. Đo thật: SHB chỉ có
+    đúng một bản báo cáo thật và nó ở `HNX/2020/`, ACB và VIB cũng có bản `HNX/2019/`.
+    Chỉ tra thư mục theo sàn hôm nay là bỏ sót cả ba.
+    """
+    first = EXCHANGE_FOLDER.get((exchange or "HOSE").upper(), "HOSE")
+    return [first] + [f for f in ("HOSE", "HNX", "UPCOM") if f != first]
 
 
 def find_reports(symbol: str, exchange: str, years: Tuple[int, ...]) -> List[Dict]:
@@ -116,19 +137,26 @@ def find_reports(symbol: str, exchange: str, years: Tuple[int, ...]) -> List[Dic
     out: List[Dict] = []
     with httpx.Client(timeout=30, follow_redirects=True, headers=_HEADERS) as client:
         for year in years:
-            for suffix in NAME_SUFFIXES:
-                url = report_url(symbol, exchange, year, suffix)
-                _throttle()
-                try:
-                    resp = client.head(url)
-                except Exception:  # noqa: BLE001 — mạng chập chờn thì coi như không có
-                    continue
-                if resp.status_code == 200 and "pdf" in resp.headers.get("content-type", ""):
-                    out.append({
-                        "symbol": symbol.upper(), "year": year, "url": url,
-                        "bytes": int(resp.headers.get("content-length") or 0),
-                    })
-                    break  # mỗi năm chỉ lấy một bản
+            hit = None
+            for folder in _folders(exchange):
+                for suffix in NAME_SUFFIXES:
+                    url = _url(symbol, folder, year, suffix)
+                    _throttle()
+                    try:
+                        resp = client.head(url)
+                    except Exception:  # noqa: BLE001 — mạng chập chờn coi như không có
+                        continue
+                    ctype = resp.headers.get("content-type", "")
+                    if resp.status_code == 200 and "pdf" in ctype:
+                        hit = {
+                            "symbol": symbol.upper(), "year": year, "url": url,
+                            "bytes": int(resp.headers.get("content-length") or 0),
+                        }
+                        break
+                if hit:
+                    break
+            if hit:
+                out.append(hit)  # mỗi năm chỉ lấy một bản
     return out
 
 
@@ -205,16 +233,27 @@ def prose_pages(pages: List[str]) -> List[Tuple[int, str]]:
 
 
 def is_annual_report(pages: List[str]) -> Tuple[bool, str]:
-    """Đây có thật là báo cáo thường niên không. Trả về (kết luận, lý do nếu không)."""
-    if len(pages) < MIN_PAGES:
-        return False, f"chỉ {len(pages)} trang (cần ≥{MIN_PAGES}) — nhiều khả năng là công văn"
+    """Đây có thật là báo cáo thường niên không. Trả về (kết luận, lý do nếu không).
+
+    Thứ tự kiểm tra là có chủ đích: HỎI "CÓ CHỮ KHÔNG" TRƯỚC, hỏi "đủ dài không" sau.
+    Làm ngược lại thì lý do trả về sai sự thật — DGC 2019 là bản scan 28 trang, nhưng
+    vì kiểm số trang trước nên nó bị ghi là "nhiều khả năng là công văn". Lý do sai dẫn
+    người đọc đi sai hướng: công văn thì phải tìm nguồn khác, còn bản scan thì OCR là
+    xong. Một lý do sai còn tệ hơn không có lý do, vì nó nghe như đã điều tra rồi.
+    """
+    total_text = sum(len(t.strip()) for t in pages)
+    if total_text < 5000:
+        # Không có lớp chữ thì không đo được văn xuôi, chỉ còn số trang để đoán. Vài
+        # trang thì dù OCR cũng vẫn là công văn; vài chục trang thì OCR có cửa.
+        if len(pages) < LETTER_PAGES:
+            return False, f"công văn {len(pages)} trang, bản scan — không phải báo cáo"
+        return False, f"PDF không có lớp chữ (bản scan, {len(pages)} trang) — cần OCR"
     if looks_garbled(pages):
         return False, "chữ bóc ra là rác (phông TCVN3/VNI)"
-    prose = prose_pages(pages)
-    chars = sum(len(t) for _p, t in prose)
+    if len(pages) < MIN_PAGES:
+        return False, f"chỉ {len(pages)} trang (cần ≥{MIN_PAGES}) — nhiều khả năng là công văn"
+    chars = sum(len(t) for _p, t in prose_pages(pages))
     if chars < MIN_PROSE_CHARS:
-        if sum(len(t.strip()) for t in pages) < 5000:
-            return False, "PDF không có lớp chữ (bản scan)"
         return False, f"chỉ {chars:,} ký tự văn xuôi (cần ≥{MIN_PROSE_CHARS:,})"
     return True, ""
 

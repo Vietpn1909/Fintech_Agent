@@ -517,10 +517,14 @@ nằm ở một collection Qdrant riêng để không chen vào kết quả tìm
 *"doanh nghiệp này làm gì"*, **không** đủ để trả lời *"doanh nghiệp nêu rủi ro gì"* — báo
 cáo thường niên Việt Nam vẫn chưa có trong hệ thống.
 
-Và từ 2026-09-16, **22/30 mã VN30 có cả BÁO CÁO THƯỜNG NIÊN tiếng Việt** (40.138 đoạn,
+Và từ 2026-09-16, **29/30 mã VN30 có cả BÁO CÁO THƯỜNG NIÊN tiếng Việt** (48.023 đoạn,
 tải từ kho tĩnh của VietStock). Hỏi *"FPT nêu rủi ro gì"* giờ trả lời được, kèm số trang
-để đối chiếu với file gốc. 8 mã còn lại: 4 mã chỉ có bản scan ảnh, 4 mã không công bố theo
-mẫu đường dẫn đó — script nói rõ từng lý do thay vì im lặng bỏ qua.
+để đối chiếu với file gốc.
+
+Mã duy nhất còn thiếu là DGC: cả bảy năm 2019–2025 đều là bản scan ảnh, muốn dùng thì
+phải OCR. Bảy mã từng bị coi là "không có" hóa ra chỉ là tìm chưa tới — chi tiết ở
+`docs/nguon_du_lieu_viet_nam.md`. Mỗi trích dẫn đều ghi rõ năm, nên báo cáo cũ vẫn dùng
+được mà người đọc không bị nhầm là số của năm nay.
 
 ```
 FPT   FPT Corporation                      70,1 nghìn tỷ VND (2025)

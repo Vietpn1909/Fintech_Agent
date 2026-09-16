@@ -59,8 +59,12 @@ def main() -> None:
     ap.add_argument("--apply", action="store_true", help="ghi vao Qdrant (mac dinh chay thu)")
     ap.add_argument("--limit", type=int, default=None, help="chi xu ly N ma dau tien")
     ap.add_argument("--symbols", default=None, help="danh sach ma, cach nhau bang dau phay")
-    ap.add_argument("--years", default="2025,2024,2023",
-                    help="cac nam thu theo thu tu uu tien (mac dinh 2025,2024,2023)")
+    # Vì sao lùi tới 2019 chứ không dừng ở 2023: tám mã VN30 từng bị loại vì "không có
+    # file" hoặc "bản scan" hóa ra đều có báo cáo thật ở năm cũ hơn — SAB ở 2020, SHB ở
+    # 2020, SSB ở 2019, TPB ở 2020. Báo cáo cũ vẫn đáng giá vì mọi trích dẫn đều ghi rõ
+    # năm, nên người đọc tự biết mình đang đọc thông tin của năm nào.
+    ap.add_argument("--years", default="2025,2024,2023,2022,2021,2020,2019",
+                    help="cac nam thu theo thu tu uu tien (moi nhat truoc)")
     args = ap.parse_args()
 
     years = tuple(int(y) for y in args.years.split(",") if y.strip())

@@ -296,7 +296,7 @@ Chọn `paraphrase-multilingual-MiniLM-L12-v2` (0,22 GB) thay vì `multilingual-
 ### Kết quả
 
 ```
-22/30 mã VN30 · 40.138 đoạn · độ dài đoạn trung vị 281 ký tự · nhúng hết 10 phút
+29/30 mã VN30 · 48.023 đoạn · độ dài đoạn trung vị ~283 ký tự
 kho 10-K giữ nguyên 23.869 đoạn · kho mô tả giữ nguyên 1.527 đoạn
 ```
 
@@ -308,7 +308,7 @@ Tìm bằng tiếng Anh vẫn ra đúng đoạn tiếng Việt (model đa ngữ 
                                         với mức 2.500 đồng mỗi cổ phiếu"
 ```
 
-### 8 mã VN30 không nạp được, và vì sao
+### 8 mã VN30 không nạp được, và vì sao — BẢNG NÀY ĐÃ SAI, xem mục kế tiếp
 
 | Lý do | Mã |
 |---|---|
@@ -317,6 +317,43 @@ Tìm bằng tiếng Anh vẫn ra đúng đoạn tiếng Việt (model đa ngữ 
 
 Bản scan cần OCR tiếng Việt — một dự án riêng nữa, và OCR sai chính tả thì câu trả lời
 dẫn nguồn sai mà vẫn trông hợp lệ. Chưa làm.
+
+### Cập nhật — 7 trong 8 mã đó vốn không hỏng, chỉ là tìm chưa tới
+
+Bảng trên nói "mọi năm" và "không có file nào". Cả hai đều không đúng, và sai theo cùng
+một kiểu: **kết luận được phát biểu rộng hơn phạm vi đã đo**. Thực tế chỉ thử ba năm
+2025/2024/2023, ở đúng một thư mục sàn. Dò lại 2019–2025 trên cả ba thư mục:
+
+| Mã | Bảng cũ nói | Thật ra |
+|---|---|---|
+| SAB | không có file nào | có, ở **2020** (9,5 MB, 105 trang) |
+| SHB | không có file nào | có, ở **HNX/2020** (8,8 MB, 174 trang) |
+| SSB | không có file nào | có, ở **2019** (6,3 MB, 92 trang) |
+| TPB | không có file nào | có, ở **2020** (10,4 MB, 65 trang) |
+| ACB | mọi năm đều scan | 2021 có lớp chữ (12,4 MB, 135 trang) |
+| GAS | mọi năm đều scan | 2022 có lớp chữ (9,3 MB, 93 trang) |
+| VIB | mọi năm đều scan | 2022 có lớp chữ (12,0 MB, 89 trang) |
+| DGC | mọi năm đều scan | **đúng** — cả 7 năm đều scan |
+
+Hai nguyên nhân, cả hai đều đáng ghi lại:
+
+1. **Khoảng năm quá hẹp.** Ba năm gần nhất là phản xạ tự nhiên khi làm dữ liệu tài chính,
+   nhưng nó lẫn lộn hai câu hỏi khác nhau: *"số liệu mới nhất là bao nhiêu"* (phải mới)
+   và *"doanh nghiệp tự mô tả rủi ro và chiến lược thế nào"* (một báo cáo 2020 vẫn nói
+   được rất nhiều). Vì mọi trích dẫn đều in kèm năm, báo cáo cũ không gây hiểu nhầm.
+2. **Thư mục sàn là sàn LÚC CÔNG BỐ, không phải sàn hôm nay.** SHB, ACB, VIB đều niêm yết
+   ở HNX rồi mới chuyển sang HOSE quanh 2020–2021, nên báo cáo cũ của họ nằm ở `HNX/`
+   trong khi đồ thị ghi sàn hiện tại là HSX. Chỉ tra theo sàn hôm nay là bỏ sót cả ba.
+   `_folders()` nay thử sàn hiện tại trước rồi tới các sàn còn lại.
+
+Còn một lỗi thứ ba, nhỏ hơn nhưng cùng họ: thứ tự kiểm tra trong `is_annual_report` đặt
+"đủ số trang chưa" TRƯỚC "có chữ không", nên DGC 2019 — một bản scan 28 trang — bị ghi lý
+do là *"nhiều khả năng là công văn"*. Lý do sai đẩy người đọc đi sai hướng: công văn thì
+phải tìm nguồn khác, bản scan thì OCR là xong. Một lý do sai còn tệ hơn không có lý do,
+vì nó nghe như đã điều tra rồi. Nay hỏi "có chữ không" trước, và phân biệt công văn scan
+(dưới 10 trang, OCR cũng vô ích) với báo cáo scan (đáng OCR).
+
+**Kết quả: 22/30 → 29/30 mã · 40.138 → 48.023 đoạn.** DGC là mã duy nhất thật sự cần OCR.
 
 ### Bốn cái bẫy, cả bốn đều im lặng
 
