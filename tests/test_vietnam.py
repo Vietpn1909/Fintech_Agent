@@ -223,7 +223,37 @@ def main() -> int:
         failures.append(f"Mô tả Việt Nam lọt vào tìm kiếm không lọc: {leaked}")
     print()
     print("=" * 78)
-    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1 + 5
+    print("NHÓM 7 — mã trùng hai sàn KHÔNG được báo là 'không có dữ liệu'")
+    print("=" * 78)
+    # ⚠️ NHẬP NHẰNG LÀ BIẾT MÀ CHƯA CHỌN ĐƯỢC; KHÔNG-CÓ-DỮ-LIỆU LÀ KHÔNG BIẾT.
+    #
+    # Đo thật trước khi sửa: hỏi "SAB (Sabeco) nêu những rủi ro chính nào?" thì agent
+    # trả lời "Hệ thống không có dữ liệu về doanh nghiệp SAB (Sabeco)" — trong khi báo
+    # cáo thường niên 2020 của Sabeco nằm sẵn trong kho. Nguyên nhân: search_filings
+    # gộp `ambiguous` vào `unresolved`, rồi phần hint bảo thẳng agent nói là không có.
+    #
+    # Lỗi này tệ hơn tìm trượt vì nó KHẲNG ĐỊNH dữ liệu không tồn tại — người đọc không
+    # có lý do nghi ngờ để hỏi lại bằng cách viết khác. Ảnh hưởng 374/1.532 mã Việt Nam
+    # trùng mã với doanh nghiệp Mỹ, trong đó có SAB, ACB, MSN, PLX, TPB.
+    for bare in ("SAB", "ACB", "MSN", "PLX", "TPB"):
+        r = search_filings(query="rủi ro và chiến lược", companies=[bare], top_k=2)
+        good = r.get("status") in ("company_ambiguous", "ok")
+        print(f"  {'đúng' if good else 'SAI '}  mã trần {bare:<4} -> {r.get('status')}")
+        if not good:
+            failures.append(f"Mã trần {bare} lẽ ra phải báo nhập nhằng, nhận được "
+                            f"{r.get('status')}")
+
+    # Đối chứng: tên không có thật VẪN phải bị từ chối. Nếu ca này hỏng thì bản sửa đã
+    # nới quá tay và biến mọi thứ thành 'có thể có' — mất luôn lớp chặn khớp sai.
+    junk = search_filings(query="rủi ro", companies=["cong ty khong co that xyz"], top_k=2)
+    ok_junk = junk.get("status") == "company_not_found"
+    print(f"  {'đúng' if ok_junk else 'SAI '}  tên bịa -> {junk.get('status')}")
+    if not ok_junk:
+        failures.append(f"Tên bịa lẽ ra phải là company_not_found, nhận được {junk.get('status')}")
+
+    print()
+    print("=" * 78)
+    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1 + 5 + 6
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for item in failures:
