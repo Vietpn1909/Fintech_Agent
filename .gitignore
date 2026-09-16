@@ -7,3 +7,4 @@ data/processed/
 data/cache/
 .ipynb_checkpoints/
 eval_results/
+data/tessdata/

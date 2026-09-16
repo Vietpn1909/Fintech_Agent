@@ -530,7 +530,16 @@ def search_filings(
                 "fiscal_year": h.get("fiscal_year"), "item": "AR",
                 "item_title": h["item_title"], "score": round(h["score"], 3),
                 "text": h["text"], "chunk_id": h["chunk_id"],
-                "source_note": "Trích báo cáo thường niên do doanh nghiệp công bố.",
+                # Đoạn đọc từ bản scan bằng OCR phải TỰ KHAI. Chữ OCR sai chính tả theo
+                # kiểu không ai nhận ra trong câu trả lời — đo thật trên DGC 2025:
+                # "community" thành "commumity", "risks" thành "rislcs". Câu vẫn trôi,
+                # trích dẫn vẫn có số trang thật, người đọc không có dấu hiệu nào để ngờ.
+                "source_note": (
+                    "Trích báo cáo thường niên do doanh nghiệp công bố."
+                    + (" ⚠ Chữ đọc từ BẢN SCAN bằng OCR nên có thể sai chính tả — khi "
+                       "trích dẫn phải nói rõ điều này cho người dùng."
+                       if "OCR" in (h.get("item_title") or "") else "")
+                ),
             }
             for h in report_hits
         ] + [

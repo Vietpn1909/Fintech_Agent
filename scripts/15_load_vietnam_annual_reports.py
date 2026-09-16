@@ -37,6 +37,7 @@ from rich.table import Table
 
 from config.settings import settings  # noqa: F401 — chỉnh stdout sang UTF-8 cho Windows
 from src.graph.store import GraphStore
+from src.ingest import vn_ir_site
 from src.ingest.vn_annual_report import (
     chunk_report, download, extract_pages, find_reports, is_annual_report, prose_pages,
 )
@@ -106,9 +107,23 @@ def main() -> None:
         for symbol in symbols:
             info = known[symbol]
             try:
-                candidates = find_reports(symbol, info.get("exchange") or "HOSE", years)
+                # HAI NGUỒN, ƯU TIÊN NGUỒN GỐC.
+                #
+                # Trang của chính doanh nghiệp là nguồn đáng tin nhất (không qua trung
+                # gian) và thường mới hơn hẳn: HPG có 2025 ở hoaphat.com.vn trong khi
+                # VietStock dừng ở 2023. Nhưng nó chỉ phủ được vài mã có trang dựng sẵn
+                # ở máy chủ, nên VietStock vẫn là nguồn phủ rộng phía sau.
+                #
+                # Gộp rồi sắp theo năm giảm dần; cùng một năm thì giữ bản của doanh
+                # nghiệp. Vẫn thử lần lượt vì bản nào cũng có thể là bản scan.
+                site = vn_ir_site.find_reports(symbol)
+                static = find_reports(symbol, info.get("exchange") or "HOSE", years)
+                merged = {}
+                for found in list(static) + list(site):   # site ghi đè static cùng năm
+                    merged[found["year"]] = found
+                candidates = [merged[y] for y in sorted(merged, reverse=True)]
                 if not candidates:
-                    rejected.append((symbol, "—", "không có file nào theo mẫu đường dẫn"))
+                    rejected.append((symbol, "—", "không có file nào ở cả hai nguồn"))
                     continue
 
                 # Thử lần lượt từ bản mới nhất. Bản mới nhất có thể là bản scan (bóc ra
@@ -116,8 +131,11 @@ def main() -> None:
                 # hơn một năm còn hơn không có gì, miễn là ghi rõ năm trong từng trích dẫn.
                 picked = None
                 for found in candidates:
-                    path = RAW_DIR / f"{symbol}_{found['year']}.pdf"
-                    size = download(found["url"], path)
+                    src = found.get("source", "vietstock")
+                    suffix = "_ir" if src == "ir_site" else ""
+                    path = RAW_DIR / f"{symbol}_{found['year']}{suffix}.pdf"
+                    fetch = vn_ir_site.download if src == "ir_site" else download
+                    size = fetch(found["url"], path)
                     pages = extract_pages(path)
                     ok, why = is_annual_report(pages)
                     if ok:
@@ -136,6 +154,7 @@ def main() -> None:
                 all_chunks.extend(chunks)
                 loaded.append({
                     "symbol": symbol, "year": found["year"], "mb": size / 1e6,
+                    "source": "doanh nghiệp" if found.get("source") == "ir_site" else "VietStock",
                     "pages": len(pages), "prose": len(prose_pages(pages)),
                     "chunks": len(chunks),
                 })
@@ -148,10 +167,11 @@ def main() -> None:
 
     if loaded:
         table = Table(title="Báo cáo nạp được")
-        for col in ("Mã", "Năm", "MB", "Trang", "Trang văn xuôi", "Đoạn"):
-            table.add_column(col, justify="right" if col != "Mã" else "left")
+        for col in ("Mã", "Năm", "Nguồn", "MB", "Trang", "Trang văn xuôi", "Đoạn"):
+            table.add_column(col, justify="left" if col in ("Mã", "Nguồn") else "right")
         for row in loaded:
-            table.add_row(row["symbol"], str(row["year"]), f"{row['mb']:.1f}",
+            table.add_row(row["symbol"], str(row["year"]), row.get("source", "VietStock"),
+                          f"{row['mb']:.1f}",
                           str(row["pages"]), str(row["prose"]), f"{row['chunks']:,}")
         console.print(table)
         lens = [len(c.text) for c in all_chunks]

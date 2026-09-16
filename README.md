@@ -517,14 +517,20 @@ nằm ở một collection Qdrant riêng để không chen vào kết quả tìm
 *"doanh nghiệp này làm gì"*, **không** đủ để trả lời *"doanh nghiệp nêu rủi ro gì"* — báo
 cáo thường niên Việt Nam vẫn chưa có trong hệ thống.
 
-Và từ 2026-09-16, **29/30 mã VN30 có cả BÁO CÁO THƯỜNG NIÊN tiếng Việt** (48.023 đoạn,
-tải từ kho tĩnh của VietStock). Hỏi *"FPT nêu rủi ro gì"* giờ trả lời được, kèm số trang
-để đối chiếu với file gốc.
+Và từ 2026-09-16, **30/30 mã VN30 có cả BÁO CÁO THƯỜNG NIÊN tiếng Việt** (48.438 đoạn).
+Hỏi *"FPT nêu rủi ro gì"* giờ trả lời được, kèm số trang để đối chiếu với file gốc.
 
-Mã duy nhất còn thiếu là DGC: cả bảy năm 2019–2025 đều là bản scan ảnh, muốn dùng thì
-phải OCR. Bảy mã từng bị coi là "không có" hóa ra chỉ là tìm chưa tới — chi tiết ở
-`docs/nguon_du_lieu_viet_nam.md`. Mỗi trích dẫn đều ghi rõ năm, nên báo cáo cũ vẫn dùng
-được mà người đọc không bị nhầm là số của năm nay.
+Ba nguồn, xếp theo độ tin cậy, và script tự chọn bản mới nhất đọc được:
+
+| Nguồn | Vai trò | Phủ |
+|---|---|---|
+| Trang của chính doanh nghiệp | nguồn gốc, mới nhất | HPG, SAB, VJC — đều lên 2025 |
+| Kho tĩnh VietStock | phủ rộng | 26 mã |
+| OCR bản scan | phương án cuối | DGC |
+
+Mã nào chỉ có bản scan thì mọi đoạn mang nhãn *"chữ do OCR từ bản scan"* ngay trong tiêu đề
+trích dẫn, và agent bắt buộc phải nhắc lại điều đó — chữ OCR sai chính tả theo kiểu không
+ai nhận ra trong câu trả lời.
 
 ```
 FPT   FPT Corporation                      70,1 nghìn tỷ VND (2025)

@@ -229,6 +229,9 @@ Quy tắc bắt buộc:
    soạn, chỉ dùng để nói doanh nghiệp làm gì. Nếu người dùng hỏi về rủi ro hay chiến
    lược mà KHÔNG có kết quả `AR` nào, phải nói thẳng: hệ thống chưa có báo cáo thường
    niên của doanh nghiệp đó, chứ không được suy từ đoạn mô tả.
+4e. Đoạn nào có nhãn "chữ do OCR từ bản scan" thì khi trích dẫn PHẢI nói rõ với người
+   dùng rằng chữ được máy đọc từ bản scan nên có thể sai chính tả. Không được lặng lẽ
+   trình bày nó như chữ trích thẳng từ văn bản gốc.
 5. Nếu hệ thống vừa tự đi lấy dữ liệu (trường just_ingested), hãy nói với người dùng.
 6. Không đưa ra khuyến nghị mua/bán. Chỉ trình bày dữ kiện và phân tích.
 

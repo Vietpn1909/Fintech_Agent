@@ -296,7 +296,7 @@ Chọn `paraphrase-multilingual-MiniLM-L12-v2` (0,22 GB) thay vì `multilingual-
 ### Kết quả
 
 ```
-29/30 mã VN30 · 48.023 đoạn · độ dài đoạn trung vị ~283 ký tự
+30/30 mã VN30 · 48.438 đoạn · độ dài đoạn trung vị ~283 ký tự
 kho 10-K giữ nguyên 23.869 đoạn · kho mô tả giữ nguyên 1.527 đoạn
 ```
 
@@ -354,6 +354,39 @@ vì nó nghe như đã điều tra rồi. Nay hỏi "có chữ không" trước,
 (dưới 10 trang, OCR cũng vô ích) với báo cáo scan (đáng OCR).
 
 **Kết quả: 22/30 → 29/30 mã · 40.138 → 48.023 đoạn.** DGC là mã duy nhất thật sự cần OCR.
+
+### Cập nhật — nguồn thứ hai và thứ ba, lên 30/30
+
+Bảng trên nói VietStock đã cạn đường với 10 mã mắc kẹt ở báo cáo cũ 2–6 năm. Đúng với
+VietStock, nhưng không đúng với câu hỏi "còn nguồn nào khác không".
+
+**Trang của chính doanh nghiệp là nguồn gốc, và mới hơn hẳn.** Đo thật:
+
+| Mã | VietStock | Trang doanh nghiệp |
+|---|---|---|
+| HPG | 2023 | **2025** — 17,3 MB, 141 trang, có lớp chữ |
+| SAB | 2020 | **2025** — 47,2 MB, 101 trang, có lớp chữ |
+| VJC | 2023 | **2025** — 15,0 MB, 123 trang, có lớp chữ |
+
+Nhưng cách này chỉ dùng được với trang dựng sẵn ở máy chủ. Đo trên 7 ngân hàng còn lại
+(ACB, GAS, HDB, SHB, SSB, TPB, VIB): vào thẳng trang báo cáo thường niên thì HTML trả về
+135–180 KB mà **không chứa một link `.pdf` nào** — danh sách tài liệu do JavaScript dựng
+sau khi tải trang. Muốn lấy phải chạy trình duyệt thật (Playwright), chưa làm. Danh sách
+này được ghi vào `JS_ONLY` trong `src/ingest/vn_ir_site.py` để lần sau không dò lại.
+
+Các nguồn khác đã thử và không dùng được: VCI không có endpoint tài liệu (404 cho cả 9
+đường dẫn thử), Fireant đã đóng API (404), TCBS chặn (403), cổng UBCKNN và HOSE đều trả
+vỏ SPA rỗng, danh sách tài liệu của VietStock cần CSRF token.
+
+**DGC thì OCR.** Kiểm tận cấu trúc file: mỗi trang chứa đúng một đối tượng loại ảnh,
+không có lớp chữ ẩn, không phải lỗi bảng mã phông. Tesseract 5.4 với gói `tessdata_best`
+tiếng Việt ở 200 DPI cho tỷ lệ ký tự có dấu **24,9%** — sát mức 27% của văn bản Unicode
+thật, nên cổng chất lượng (ngưỡng 12%) cho qua. 58 trang, 37 trang văn xuôi, 326 đoạn.
+
+Chữ OCR vẫn sai, và sai theo kiểu khó thấy: ở trang tiếng Anh của chính báo cáo đó,
+"community" thành "commumity", "risks" thành "rislcs". Nên mỗi đoạn mang nhãn *"chữ do OCR
+từ bản scan"* trong tiêu đề trích dẫn, `source_note` cảnh báo, và ANSWER_PROMPT có luật 4e
+buộc agent nói rõ với người dùng.
 
 ### Bốn cái bẫy, cả bốn đều im lặng
 

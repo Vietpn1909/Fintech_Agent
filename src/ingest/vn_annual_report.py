@@ -264,11 +264,17 @@ def _sentences(text: str) -> List[str]:
     return [p for p in parts if p]
 
 
-def chunk_report(ticker: str, company: str, year: int, pages: List[str]) -> List[Chunk]:
+def chunk_report(ticker: str, company: str, year: int, pages: List[str],
+                 ocr: bool = False) -> List[Chunk]:
     """Cắt báo cáo thành đoạn, MỖI ĐOẠN GIỮ SỐ TRANG.
 
     Số trang là thứ khiến câu trả lời kiểm chứng được: người đọc mở đúng trang đó trong
     file PDF gốc để đối chiếu, y như cách trích dẫn "NVDA FY2026, Item 1A" ở phía Mỹ.
+
+    `ocr=True` ghi thẳng vào nhãn trích dẫn rằng chữ này do máy đọc ảnh mà ra. Chữ OCR
+    sai chính tả theo kiểu rất khó nhận: "Đức Giang" thành "Đức Giang" hay "Đúc Giang"
+    tùy chất lượng ảnh. Người đọc phải biết mình đang đọc loại nào để cân nhắc, nên nhãn
+    này đi theo tận câu trả lời chứ không chỉ nằm trong siêu dữ liệu.
     """
     chunks: List[Chunk] = []
     for page_no, text in prose_pages(pages):
@@ -278,10 +284,10 @@ def chunk_report(ticker: str, company: str, year: int, pages: List[str]) -> List
             # Câu dài hơn cả đoạn (bảng biểu bị làm phẳng) thì cắt cứng.
             while len(sentence) > TARGET_CHARS:
                 head, sentence = sentence[:TARGET_CHARS], sentence[TARGET_CHARS:]
-                chunks.append(_make(ticker, company, year, page_no, seq, head))
+                chunks.append(_make(ticker, company, year, page_no, seq, head, ocr))
                 seq += 1
             if len(buffer) + len(sentence) + 1 > TARGET_CHARS and buffer:
-                chunks.append(_make(ticker, company, year, page_no, seq, buffer))
+                chunks.append(_make(ticker, company, year, page_no, seq, buffer, ocr))
                 seq += 1
                 # Phần chồng lấn phải bắt đầu ở RANH GIỚI TỪ. Cắt thẳng theo số ký tự
                 # thì đoạn sau mở đầu bằng nửa từ ("ợi, phòng ngừa rủi ro...") — trích dẫn
@@ -290,11 +296,12 @@ def chunk_report(ticker: str, company: str, year: int, pages: List[str]) -> List
                 buffer = (tail.split(" ", 1)[1] if " " in tail else "") + " "
             buffer = f"{buffer}{sentence} "
         if len(buffer.strip()) >= 80:
-            chunks.append(_make(ticker, company, year, page_no, seq, buffer))
+            chunks.append(_make(ticker, company, year, page_no, seq, buffer, ocr))
     return chunks
 
 
-def _make(ticker: str, company: str, year: int, page: int, seq: int, text: str) -> Chunk:
+def _make(ticker: str, company: str, year: int, page: int, seq: int, text: str,
+          ocr: bool = False) -> Chunk:
     return Chunk(
         chunk_id=f"{ticker}_AR{year}_p{page:04d}_{seq:02d}",
         doc_id=f"{ticker}_AR_{year}",
@@ -303,7 +310,8 @@ def _make(ticker: str, company: str, year: int, page: int, seq: int, text: str) 
         form="BCTN",
         fiscal_year=str(year),
         item="AR",
-        item_title=f"Báo cáo thường niên {year} · trang {page}",
+        item_title=(f"Báo cáo thường niên {year} · trang {page}"
+                    + (" · chữ do OCR từ bản scan" if ocr else "")),
         text=text.strip(),
         seq=seq,
     )

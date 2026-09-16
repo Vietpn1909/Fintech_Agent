@@ -41,3 +41,10 @@ uvicorn[standard]==0.34.0
 
 # grandalf: vẽ sơ đồ LangGraph ra ASCII khi gỡ lỗi
 grandalf==0.8
+
+# OCR cho báo cáo thường niên bản scan (chỉ DGC trong rổ VN30).
+# Tesseract là chương trình hệ thống, không cài bằng pip:
+#   winget install --id UB-Mannheim.TesseractOCR
+# Gói tiếng Việt tải về data/tessdata/ từ tesseract-ocr/tessdata_best (12 MB) — bản
+# "best" chứ không phải "fast", vì dấu tiếng Việt là chỗ mô hình nhanh sai nhiều nhất,
+# mà dấu sai thì chữ sai nghĩa. Ảnh trang do pypdfium2 dựng (đã có sẵn ở trên).
