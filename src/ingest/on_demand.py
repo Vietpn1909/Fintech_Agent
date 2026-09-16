@@ -65,6 +65,11 @@ def _fold(text: str) -> str:
     )
 
 
+# Tách "SAB (Sabeco)" thành ["SAB", "Sabeco"]. Cũng bắt ngoặc vuông và dấu gạch dài,
+# hai cách chú thích tên doanh nghiệp thường gặp không kém.
+_PAREN_SPLIT = re.compile(r"[()\[\]]|\s+[–—]\s+")
+
+
 def _simplify(text: str) -> str:
     text = _SUFFIX.sub("", _fold(text))
     return re.sub(r"[^a-z0-9 ]", " ", text).strip()
@@ -393,7 +398,7 @@ def _suggest(query: str, k: int = 3) -> List[Dict[str, str]]:
     return out
 
 
-def resolve_company(query: str, limit: int = 5) -> Dict[str, Any]:
+def resolve_company(query: str, limit: int = 5, depth: int = 0) -> Dict[str, Any]:
     """Phân giải tên công ty, VÀ TỪ CHỐI khi không đủ chắc chắn.
 
     ⚠️ ĐÂY LÀ LỚP CHẶN QUAN TRỌNG NHẤT CỦA TOÀN HỆ THỐNG.
@@ -477,6 +482,47 @@ def resolve_company(query: str, limit: int = 5) -> Dict[str, Any]:
         return {"status": "ok", "best": vn[0], "alternatives": []}
 
     if not strong:
+        # ⚠️ "MÃ (TÊN)" LÀ CÁCH VIẾT BÌNH THƯỜNG, ĐỪNG ĐỂ NÓ THÀNH "KHÔNG CÓ DỮ LIỆU".
+        #
+        # Đo thật: hỏi "SAB (Sabeco) nêu những rủi ro chính nào?" thì agent trả lời "Hệ
+        # thống không có dữ liệu về doanh nghiệp SAB (Sabeco)" — trong khi báo cáo thường
+        # niên 2020 của Sabeco NẰM SẴN trong kho. Cả hai vế đều phân giải được khi đứng
+        # riêng ("Sabeco" -> SAB.VN), chỉ ghép lại là hỏng, vì chuỗi có ngoặc không khớp
+        # với bất cứ tên nào.
+        #
+        # Đây tệ hơn một lần tìm trượt: câu trả lời KHẲNG ĐỊNH dữ liệu không tồn tại. Người
+        # đọc không có lý do gì để nghi ngờ rồi hỏi lại bằng cách viết khác.
+        #
+        # Vẫn giữ nguyên tắc không tự chọn: chỉ nhận khi hai vế cùng chỉ về MỘT mã, hoặc
+        # chỉ đúng một vế phân giải được. Hai vế chỉ hai nơi khác nhau thì báo nhập nhằng.
+        if depth == 0:
+            parts = [p for p in _PAREN_SPLIT.split(raw) if len(p.strip()) > 1]
+            if len(parts) > 1:
+                solved, unclear = [], []
+                for part in parts:
+                    sub = resolve_company(part.strip(), limit=limit, depth=1)
+                    if sub.get("status") == "ok":
+                        solved.append(sub)
+                    elif sub.get("status") == "ambiguous":
+                        unclear.append(sub)
+                # Không vế nào chắc chắn, nhưng có vế NHẬP NHẰNG thì trả nhập nhằng —
+                # "ACB (Ngân hàng Á Châu)" phải thành câu hỏi lại, không thành "không có
+                # dữ liệu". Nhập nhằng là biết mà chưa chọn được; not_found là không biết.
+                if not solved and unclear:
+                    return unclear[0]
+                tickers = {s["best"]["ticker"] for s in solved}
+                if len(tickers) == 1:
+                    best = solved[0]
+                    best["note"] = f"đã bỏ phần trong ngoặc của '{raw}' để khớp"
+                    return best
+                if len(tickers) > 1:
+                    return {
+                        "status": "ambiguous", "query": query,
+                        "options": [s["best"] for s in solved],
+                        "hint": (f"'{raw}' gồm nhiều phần chỉ về các doanh nghiệp khác "
+                                 f"nhau. Hãy hỏi lại người dùng ý nào."),
+                    }
+
         # Ứng viên yếu vẫn trả về, nhưng dán nhãn rõ là gợi ý — để agent có thể hỏi lại
         # "có phải bạn muốn hỏi…" thay vì im lặng bịa ra một câu trả lời.
         return {

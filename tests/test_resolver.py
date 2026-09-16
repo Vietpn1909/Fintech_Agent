@@ -34,6 +34,13 @@ from src.ingest.on_demand import resolve_company
 # ---------------------------------------------------------------- các ca kiểm thử
 
 # Tên phải BỊ TỪ CHỐI. Mỗi dòng kèm lý do và kết quả sai mà bản cũ đã trả về.
+# Ngoặc KHÔNG được trở thành đường vòng qua lớp chặn: hai vế chỉ hai doanh nghiệp khác
+# nhau, hoặc một vế vốn đã nhập nhằng, thì vẫn phải hỏi lại chứ không tự chọn.
+MUST_NOT_AUTOPICK = [
+    ("ACB (Ngân hàng Á Châu)", "ACB nhập nhằng Mỹ/Việt, phần chú thích không khớp tên nào"),
+    ("khong ton tai xyz (abc def)", "cả hai vế đều vô nghĩa"),
+]
+
 MUST_REJECT = [
     ("Acer",                  "Acer niêm yết ở Đài Loan; bản cũ trả về MACERICH (bất động sản)"),
     ("Altera",                "đã bị Intel mua; bản cũ trả về ALTRIA (thuốc lá)"),
@@ -77,6 +84,20 @@ MUST_ACCEPT = [
     ("ASML", "ASML"),
     ("Toyota", "TM"),
     ("Sony", "SONY"),
+
+    # Dạng "MÃ (Tên)" — cách chú thích tên doanh nghiệp rất thường gặp.
+    #
+    # Đo thật trước khi sửa: hỏi "SAB (Sabeco) nêu những rủi ro chính nào?" thì agent
+    # trả lời "Hệ thống không có dữ liệu về doanh nghiệp SAB (Sabeco)", trong khi báo
+    # cáo thường niên 2020 của Sabeco đã nằm sẵn trong kho. Cả hai vế đều phân giải
+    # được khi đứng riêng, chỉ ghép lại là hỏng. Loại lỗi này nguy hiểm hơn tìm trượt
+    # vì câu trả lời KHẲNG ĐỊNH dữ liệu không tồn tại.
+    ("SAB (Sabeco)", "SAB.VN"),
+    ("Sabeco (SAB)", "SAB.VN"),
+    ("FPT (FPT Corporation)", "FPT.VN"),
+    ("Masan (MSN)", "MSN.VN"),
+    ("Apple (AAPL)", "AAPL"),
+    ("Vinamilk — VNM", "VNM.VN"),          # gạch dài thay cho ngoặc
 ]
 
 
@@ -117,7 +138,20 @@ def main() -> int:
 
     print()
     print("=" * 78)
-    total = len(MUST_REJECT) + len(MUST_ACCEPT)
+    print("NHÓM 3 — ngoặc không được thành đường vòng qua lớp chặn")
+    print("=" * 78)
+    for name, why in MUST_NOT_AUTOPICK:
+        result = resolve_company(name)
+        if result["status"] == "ok":
+            got = result["best"]
+            failures.append(f"{name!r} lẽ ra không được tự chọn, nhưng ra {got['ticker']}")
+            print(f"  SAI   {name:34} -> TỰ CHỌN {got['ticker']} ({why})")
+        else:
+            print(f"  đúng  {name:34} -> {result['status']} ({why})")
+
+    print()
+    print("=" * 78)
+    total = len(MUST_REJECT) + len(MUST_ACCEPT) + len(MUST_NOT_AUTOPICK)
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for f in failures:
@@ -125,7 +159,8 @@ def main() -> int:
         return 1
 
     print(f"TẤT CẢ {total} CA ĐỀU ĐÚNG "
-          f"({len(MUST_REJECT)} ca từ chối · {len(MUST_ACCEPT)} ca chấp nhận)")
+          f"({len(MUST_REJECT)} ca từ chối · {len(MUST_ACCEPT)} ca chấp nhận · "
+          f"{len(MUST_NOT_AUTOPICK)} ca không được tự chọn)")
     return 0
 
 

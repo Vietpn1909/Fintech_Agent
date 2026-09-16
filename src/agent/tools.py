@@ -389,10 +389,15 @@ def search_filings(
         years = coerced_years or None
 
     unresolved: List[str] = []
+    ambiguous: List[Dict[str, Any]] = []
     if companies:
         tickers = []
         for name in companies:
             r = resolve_company(name)
+            if r["status"] == "ambiguous":
+                ambiguous.append({"name": name, "options": r.get("options", []),
+                                  "hint": r.get("hint", "")})
+                continue
             if r["status"] != "ok":
                 unresolved.append(name)
                 continue
@@ -416,6 +421,32 @@ def search_filings(
         #
         # Người dùng nêu tên công ty tức là họ muốn GIỚI HẠN trong công ty đó. Không
         # giới hạn được thì phải báo, không được tự ý mở rộng ra cả kho.
+        # ⚠️ NHẬP NHẰNG KHÔNG PHẢI LÀ KHÔNG CÓ — ĐỪNG GỘP HAI THỨ NÀY.
+        #
+        # Đo thật: hỏi "SAB (Sabeco) nêu những rủi ro chính nào?" thì agent bỏ ngoặc rồi
+        # gọi search_filings(companies=["SAB"]). Mã trần "SAB" vừa khớp SABS bên Mỹ vừa
+        # khớp SAB.VN, nên resolve_company trả về `ambiguous` — nhưng nhánh này chỉ hỏi
+        # "có phải ok không", nên nó rơi vào `unresolved`, và phần hint bảo thẳng agent
+        # "hãy trả lời rằng hệ thống không có dữ liệu". Agent làm đúng như được bảo:
+        #     "Hệ thống không có dữ liệu về doanh nghiệp SAB (Sabeco)."
+        # Trong khi báo cáo thường niên 2020 của Sabeco nằm ngay trong kho.
+        #
+        # Đây là lỗi tệ hơn tìm trượt: nó KHẲNG ĐỊNH dữ liệu không tồn tại, nên người đọc
+        # không có lý do nghi ngờ để hỏi lại. Chỉ ảnh hưởng đúng nhóm mã trùng hai sàn
+        # (SAB, ACB, MSN, PLX, TPB...), và đó lại là những mã lớn hay được hỏi nhất.
+        if not tickers and ambiguous:
+            return {
+                "status": "company_ambiguous",
+                "query": query,
+                "ambiguous_names": ambiguous,
+                "hint": ("Tên này khớp nhiều doanh nghiệp nên công cụ KHÔNG tự chọn. "
+                         "Dữ liệu có thể vẫn có — đừng trả lời là không có. Hãy gọi lại "
+                         "công cụ này với mã đầy đủ lấy trong `ambiguous_names.options` "
+                         "(hậu tố .VN cho sàn Việt Nam, .US cho sàn Mỹ), hoặc hỏi lại "
+                         "người dùng ý nào nếu vẫn không rõ."),
+                "results": [],
+            }
+
         if not tickers:
             return {
                 "status": "company_not_found",
