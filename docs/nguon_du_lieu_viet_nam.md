@@ -266,3 +266,70 @@ vì 10-K viết "a net loss of $18.8 billion" với con số dương.
 
 `tests/test_verify.py`: 5 ca phải bắt, 12 ca không được báo.
 
+## Cập nhật 2026-09-16 — đường C làm được, và chỗ khảo sát này đã kết luận sai
+
+### Kết luận cũ sai ở đâu
+
+Phần "Kết luận ngắn gọn" ở trên viết: *mọi cổng công bố thông tin đều là ứng dụng dựng
+bằng JavaScript, muốn lấy tài liệu phải điều khiển trình duyệt thật*. Điều đó đúng với
+GIAO DIỆN, nhưng tôi đã dừng lại ở đó và không hỏi tiếp: **giao diện đó tải file từ đâu?**
+
+VietStock lưu tài liệu trên một máy chủ tĩnh, đường dẫn có quy luật:
+
+```
+https://static2.vietstock.vn/data/{SÀN}/{NĂM}/BCTN/VN/{MÃ}_Baocaothuongnien_{NĂM}.pdf
+```
+
+Một lệnh HEAD là biết có file hay không. Không cần Playwright, không thêm 400 MB phụ
+thuộc. Bài học: "trang web là SPA" nói về cách hiển thị, không nói gì về cách lưu file.
+
+### Không phải nhúng lại 23.869 đoạn
+
+Lý do thứ ba khiến đường C bị xếp là "đắt" — phải đổi sang model nhúng đa ngữ và nhúng
+lại toàn bộ kho 10-K — cũng không đúng. Mỗi collection Qdrant có không gian vector riêng,
+nên kho báo cáo tiếng Việt dùng model riêng của nó: tài liệu nhúng bằng model nào thì câu
+hỏi nhúng bằng model đó. Kho 10-K không đổi một điểm nào.
+
+Chọn `paraphrase-multilingual-MiniLM-L12-v2` (0,22 GB) thay vì `multilingual-e5-large`
+(2,24 GB) vì GPU đã bị LM Studio chiếm 15,6/16,3 GB — nhúng buộc phải chạy CPU.
+
+### Kết quả
+
+```
+22/30 mã VN30 · 40.138 đoạn · độ dài đoạn trung vị 281 ký tự · nhúng hết 10 phút
+kho 10-K giữ nguyên 23.869 đoạn · kho mô tả giữ nguyên 1.527 đoạn
+```
+
+Tìm bằng tiếng Anh vẫn ra đúng đoạn tiếng Việt (model đa ngữ khớp chéo ngôn ngữ):
+
+```
+"business risks and risk management" -> FPT BCTN 2025, trang 137 / 132 / 131
+"dividend policy"                    -> VNM BCTN 2025, trang 48: "tạm ứng cổ tức đợt 1
+                                        với mức 2.500 đồng mỗi cổ phiếu"
+```
+
+### 8 mã VN30 không nạp được, và vì sao
+
+| Lý do | Mã |
+|---|---|
+| Mọi năm đều là **bản scan ảnh**, PDF không có lớp chữ | ACB, DGC, GAS, VIB |
+| Không có file nào theo mẫu đường dẫn | SAB, SHB, SSB, TPB |
+
+Bản scan cần OCR tiếng Việt — một dự án riêng nữa, và OCR sai chính tả thì câu trả lời
+dẫn nguồn sai mà vẫn trông hợp lệ. Chưa làm.
+
+### Bốn cái bẫy, cả bốn đều im lặng
+
+1. **Đường dẫn đúng nhưng file không phải báo cáo.** `GAS_Baocaothuongnien_2024.pdf` có
+   thật, 1,7 MB, HTTP 200 — mở ra là công văn 2 trang. Bốn mã khác chỉ có file 2022 nặng
+   68–466 KB, cùng loại. Chặn bằng ngưỡng số trang và lượng chữ văn xuôi.
+2. **Bản scan bóc ra rỗng** mà không ném lỗi nào.
+3. **Phông chữ cũ TCVN3/VNI** bóc ra thành chữ rác. Chặn bằng tỷ lệ ký tự có dấu.
+4. **Model đa ngữ chỉ đọc 128 token**, phần vượt bị cắt IM LẶNG khi nhúng — đoạn vẫn hiện
+   đủ cho người đọc, chỉ là vector chỉ đại diện phần đầu. Đo token thật trên báo cáo FPT:
+   đoạn 300 ký tự vượt ngưỡng 0/67 lần, 350 → 5/58, 450 → 15/45. Nên cắt 320 ký tự, khác
+   hẳn 1.200 ký tự của kho 10-K.
+
+Bảng số trong báo cáo bị loại khỏi kho văn bản (tỷ lệ chữ số ≥ 15%): số liệu phải đến từ
+XBRL/VCI chứ không phải từ việc mô hình đọc bảng — đúng nguyên tắc của cả dự án.
+

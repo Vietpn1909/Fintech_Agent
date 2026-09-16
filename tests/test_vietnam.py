@@ -193,12 +193,26 @@ def main() -> int:
     print("=" * 78)
     fpt_text = search_filings(query="What does the company do?", companies=["FPT"])
     items = {r.get("item") for r in fpt_text.get("results", [])}
-    ok_prof = (fpt_text.get("status") == "ok" and items == {"PROFILE"}
-               and fpt_text.get("vietnam_note"))
-    print(f"  {'đúng' if ok_prof else 'SAI '}  hỏi về FPT -> {fpt_text.get('status')}, mục {sorted(items)}")
-    if not ok_prof:
-        failures.append("FPT lẽ ra trả về đoạn mô tả PROFILE kèm vietnam_note "
-                        f"(đã chạy scripts/14 chưa?): {str(fpt_text)[:200]}")
+    ok_any = (fpt_text.get("status") == "ok" and items
+              and items <= {"AR", "PROFILE"} and fpt_text.get("vietnam_note"))
+    print(f"  {'đúng' if ok_any else 'SAI '}  hỏi FPT làm gì -> {fpt_text.get('status')}, "
+          f"mục {sorted(items)}")
+    if not ok_any:
+        failures.append("FPT lẽ ra trả về mục AR/PROFILE kèm vietnam_note "
+                        f"(đã chạy scripts/14 và 15 chưa?): {str(fpt_text)[:200]}")
+
+    # Câu hỏi RỦI RO chỉ trả lời được bằng báo cáo thường niên. Đoạn mô tả của VCI
+    # không nói gì về rủi ro, nên nếu kết quả chỉ có PROFILE thì agent sẽ hoặc bịa,
+    # hoặc nói không có — cả hai đều sai khi hệ thống ĐANG CÓ báo cáo.
+    fpt_risk = search_filings(query="business risks and risk management", companies=["FPT"])
+    ar = [r for r in fpt_risk.get("results", []) if r.get("item") == "AR"]
+    ok_ar = fpt_risk.get("status") == "ok" and ar
+    print(f"  {'đúng' if ok_ar else 'SAI '}  hỏi rủi ro FPT -> {len(ar)} đoạn báo cáo thường niên"
+          + (f", vd {ar[0]['item_title']}" if ar else ""))
+    if not ok_ar:
+        failures.append("Hỏi rủi ro FPT lẽ ra phải ra đoạn báo cáo thường niên (mục AR); "
+                        f"nhận được {sorted({r.get('item') for r in fpt_risk.get('results', [])})}")
+
     # Tìm không lọc công ty KHÔNG được lẫn mô tả Việt Nam — đó là lý do chúng nằm ở
     # collection riêng. Đoạn mô tả ngắn và chung chung dễ vượt mặt đoạn 10-K dài.
     open_q = search_filings(query="investment in AI infrastructure and data centers")
@@ -209,7 +223,7 @@ def main() -> int:
         failures.append(f"Mô tả Việt Nam lọt vào tìm kiếm không lọc: {leaked}")
     print()
     print("=" * 78)
-    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1 + 4
+    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1 + 5
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for item in failures:

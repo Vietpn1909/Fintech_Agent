@@ -18,6 +18,9 @@ qdrant-client==1.12.2
 
 # --- Embedding: ONNX chạy CPU, không chiếm VRAM của LLM ---
 fastembed>=0.8.0
+# Bóc chữ từ PDF báo cáo thường niên Việt Nam (scripts/15). Chọn pypdfium2 thay vì
+# PyMuPDF vì PyMuPDF là AGPL — bất tiện cho một dự án đưa lên GitHub công khai.
+pypdfium2==5.13.0
 mmh3>=5.3.0
 
 # --- LLM: LM Studio expose API tương thích OpenAI ---

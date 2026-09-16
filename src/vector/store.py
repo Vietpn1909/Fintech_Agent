@@ -29,12 +29,22 @@ from src.ingest.chunker import Chunk
 
 _NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 
+# Câu dẫn BẮT BUỘC của họ model BGE, đặt trước CÂU HỎI (không đặt trước tài liệu).
+BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
 
 class Embedder:
     """Bọc fastembed. Nạp model một lần rồi dùng lại (lazy, tránh tốn thời gian khởi động)."""
 
-    def __init__(self, model_name: Optional[str] = None):
+    def __init__(self, model_name: Optional[str] = None, query_prefix: Optional[str] = None):
         self.model_name = model_name or settings.embedding_model
+        # ⚠️ CÂU DẪN CHỈ ĐÚNG VỚI HỌ BGE. Model đa ngữ dùng cho báo cáo thường niên Việt
+        # Nam không được huấn luyện với câu dẫn nào; thêm vào là bịa thêm nhiễu tiếng Anh
+        # trước mỗi câu hỏi tiếng Việt. Nên câu dẫn đi theo MODEL, không nằm cứng trong mã.
+        self.query_prefix = (
+            BGE_QUERY_PREFIX if query_prefix is None and "bge" in self.model_name.lower()
+            else (query_prefix or "")
+        )
         self._model = None
 
     @property
@@ -66,8 +76,7 @@ class Embedder:
         tài liệu). Bỏ câu dẫn này đi thì điểm truy hồi tụt thấy rõ — đây là chi tiết rất
         hay bị bỏ sót khi dùng BGE.
         """
-        prefixed = f"Represent this sentence for searching relevant passages: {text}"
-        return next(iter(self.model.embed([prefixed]))).tolist()
+        return next(iter(self.model.embed([self.query_prefix + text]))).tolist()
 
 
 # Collection RIÊNG cho mô tả doanh nghiệp Việt Nam, không trộn vào kho 10-K.
@@ -82,10 +91,20 @@ VN_PROFILE_COLLECTION = f"{settings.qdrant_collection}_vn_profiles"
 
 
 class VectorStore:
-    def __init__(self, collection: Optional[str] = None):
+    def __init__(
+        self,
+        collection: Optional[str] = None,
+        model_name: Optional[str] = None,
+        dim: Optional[int] = None,
+    ):
         self.collection = collection or settings.qdrant_collection
         self.client = QdrantClient(url=settings.qdrant_url, timeout=120)
-        self.embedder = Embedder()
+        self.embedder = Embedder(model_name)
+        # Số chiều đi theo model, không lấy cứng từ settings: kho báo cáo thường niên
+        # Việt Nam dùng model khác kho 10-K. Tạo collection sai số chiều thì Qdrant báo
+        # lỗi lúc ghi, nhưng nếu hai model TRÙNG số chiều thì nó im lặng nhận vào và mọi
+        # kết quả tìm kiếm sau đó đều vô nghĩa — đúng kiểu hỏng không ai thấy.
+        self.dim = dim or settings.embedding_dim
 
     # ------------------------------------------------------------------ ghi
 
@@ -94,7 +113,7 @@ class VectorStore:
         self.client.recreate_collection(
             collection_name=self.collection,
             vectors_config=qm.VectorParams(
-                size=settings.embedding_dim, distance=qm.Distance.COSINE
+                size=self.dim, distance=qm.Distance.COSINE
             ),
         )
         # Không có payload index thì Qdrant phải quét tuần tự khi lọc -> chậm dần theo dữ liệu
@@ -131,6 +150,30 @@ class VectorStore:
             ).count
         except Exception:  # noqa: BLE001 — collection chưa tạo nghĩa là 0 điểm
             return 0
+
+    def delete_by_tickers(self, tickers: Iterable[str]) -> None:
+        """Xóa mọi điểm của các mã này. Dùng TRƯỚC khi nạp lại.
+
+        ⚠️ NẠP LẠI MÀ KHÔNG XÓA THÌ ĐỂ LẠI ĐIỂM MỒ CÔI.
+
+        `chunk_id` mang số thứ tự đoạn trong trang, nên chỉ cần đổi cách cắt đoạn là số
+        đoạn mỗi trang đổi theo: FPT từ 2.083 xuống 2.078 đoạn. Năm điểm cũ mang số thứ
+        tự cao hơn không bị ghi đè — chúng nằm lại trong kho với nội dung của lần cắt
+        TRƯỚC, và thỉnh thoảng lọt vào kết quả tìm kiếm mà không ai biết vì sao.
+        Đo thật một lần nạp lại: 40.352 điểm trong kho nhưng chỉ nạp 40.138 đoạn.
+        """
+        tickers = [t for t in tickers if t]
+        if not tickers:
+            return
+        self.client.delete(
+            collection_name=self.collection,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(
+                    must=[qm.FieldCondition(key="ticker", match=qm.MatchAny(any=list(tickers)))]
+                )
+            ),
+            wait=True,
+        )
 
     def upsert_chunks(self, chunks: List[Chunk], batch_size: int = 256) -> int:
         """Nhúng và ghi các chunk vào Qdrant.
@@ -206,3 +249,28 @@ class VectorStore:
 
     def count(self) -> int:
         return self.client.count(collection_name=self.collection, exact=True).count
+
+# Kho BÁO CÁO THƯỜNG NIÊN Việt Nam — collection riêng VÀ model nhúng riêng.
+#
+# ⚠️ ĐÂY LÀ LÝ DO KHÔNG PHẢI NHÚNG LẠI 23.869 ĐOẠN 10-K.
+#
+# Báo cáo thường niên Việt Nam viết bằng tiếng Việt, mà `bge-small-en-v1.5` chỉ hiểu
+# tiếng Anh. Cách hiển nhiên là đổi sang model đa ngữ cho TOÀN hệ thống — và phải nhúng
+# lại toàn bộ kho 10-K, vài giờ CPU, trong lúc đó hệ thống trả lời sai.
+#
+# Không cần. Mỗi collection Qdrant có không gian vector riêng, nên kho này dùng model
+# riêng: tài liệu nhúng bằng nó, câu hỏi cũng nhúng bằng nó. Kho 10-K không đổi một điểm.
+#
+# Chọn MiniLM đa ngữ (0,22 GB) thay vì multilingual-e5-large (2,24 GB) vì GPU đã bị LM
+# Studio chiếm gần hết (15,6/16,3 GB), nhúng buộc phải chạy trên CPU. Đo thật: model này
+# cho "rủi ro tỷ giá" và "foreign exchange risk" độ tương đồng 0,70, còn hai câu tiếng
+# Việt khác chủ đề chỉ 0,40 — nên agent vẫn hỏi bằng tiếng Anh như hiện nay vẫn ra đúng
+# đoạn tiếng Việt.
+VN_REPORT_COLLECTION = f"{settings.qdrant_collection}_vn_annual_reports"
+VN_REPORT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+VN_REPORT_DIM = 384
+
+# ⚠️ Model này chỉ đọc 128 token đầu; phần sau bị cắt IM LẶNG khi nhúng. Đo trên báo cáo
+# FPT 2025: đoạn 300 ký tự -> 0/67 đoạn vượt ngưỡng, 350 -> 5/58, 450 -> 15/45. Vì vậy
+# `src/ingest/vn_annual_report.py` cắt đoạn ở 320 ký tự chứ không phải 1.200 như kho 10-K.
+VN_REPORT_MAX_TOKENS = 128

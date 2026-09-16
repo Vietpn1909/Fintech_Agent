@@ -28,7 +28,10 @@ from src.graph.schema import INFRA_RELATIONS, QUERYABLE_RELATIONS, STRUCTURED_RE
 from src.graph.store import GraphStore
 from src.ingest.on_demand import ensure_text_available, is_text_indexed, resolve_company
 from src.ingest.xbrl import METRIC_LABELS
-from src.vector.store import VN_PROFILE_COLLECTION, VectorStore
+from src.vector.store import (
+    VN_PROFILE_COLLECTION, VN_REPORT_COLLECTION, VN_REPORT_DIM, VN_REPORT_MODEL,
+    VectorStore,
+)
 
 # Câu nhắc gửi kèm mọi kết quả "không tìm thấy doanh nghiệp".
 #
@@ -48,6 +51,7 @@ _OPERATORS = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "eq": "="}
 _graph: Optional[GraphStore] = None
 _vectors: Optional[VectorStore] = None
 _profiles: Optional[VectorStore] = None
+_vn_reports: Optional[VectorStore] = None
 
 
 def graph() -> GraphStore:
@@ -72,6 +76,21 @@ def profiles() -> VectorStore:
         # Dùng chung bộ nhúng với kho 10-K: cùng một model, nạp hai lần chỉ tốn RAM.
         _profiles.embedder = vectors().embedder
     return _profiles
+
+
+def vn_reports() -> VectorStore:
+    """Kho báo cáo thường niên Việt Nam.
+
+    KHÔNG dùng chung bộ nhúng với kho 10-K như `profiles()`: kho này chạy model đa ngữ
+    khác hẳn. Dùng nhầm model để nhúng câu hỏi thì Qdrant vẫn nhận (cùng 384 chiều) và
+    vẫn trả về kết quả — chỉ là kết quả vô nghĩa, không có lỗi nào báo ra.
+    """
+    global _vn_reports
+    if _vn_reports is None:
+        _vn_reports = VectorStore(
+            collection=VN_REPORT_COLLECTION, model_name=VN_REPORT_MODEL, dim=VN_REPORT_DIM
+        )
+    return _vn_reports
 
 
 # --------------------------------------------------------------------- tra cứu số liệu
@@ -434,22 +453,37 @@ def search_filings(
         hits = vectors().search(query, top_k=top_k, tickers=tickers)
         relaxed = "đã bỏ lọc theo mục và năm"
 
+    # Doanh nghiệp Việt Nam: BÁO CÁO THƯỜNG NIÊN trước, mô tả doanh nghiệp chỉ để bù.
+    #
+    # Hai nguồn khác hẳn nhau về giá trị: báo cáo là văn bản doanh nghiệp tự công bố
+    # (rủi ro, chiến lược, ban lãnh đạo nói gì), còn mô tả chỉ là một đoạn giới thiệu do
+    # VCI viết. Trộn chung rồi xếp theo điểm tương đồng thì đoạn mô tả ngắn gọn dễ vượt
+    # mặt một đoạn báo cáo cụ thể, và agent mất luôn phần có giá trị.
+    report_hits: List[Dict[str, Any]] = []
     profile_hits: List[Dict[str, Any]] = []
     if vn_tickers:
         try:
-            profile_hits = profiles().search(query, top_k=min(top_k, 3), tickers=vn_tickers)
-        except Exception:  # noqa: BLE001 — chưa chạy scripts/14 thì kho mô tả chưa tồn tại
-            profile_hits = []
+            report_hits = vn_reports().search(query, top_k=top_k, tickers=vn_tickers)
+        except Exception:  # noqa: BLE001 — chưa chạy scripts/15 thì kho chưa tồn tại
+            report_hits = []
+        if len(report_hits) < top_k:
+            try:
+                profile_hits = profiles().search(
+                    query, top_k=min(2, top_k), tickers=vn_tickers
+                )
+            except Exception:  # noqa: BLE001 — chưa chạy scripts/14
+                profile_hits = []
 
     return {
-        "status": "ok" if (hits or profile_hits) else "no_hits",
+        "status": "ok" if (hits or report_hits or profile_hits) else "no_hits",
         "query": query,
         "relaxed_filter": relaxed,  # agent phải nói rõ nếu điều kiện đã bị nới
         "just_ingested": ingested,  # để agent nói thật là nó vừa đi lấy dữ liệu
         "vietnam_note": (
-            "Doanh nghiệp Việt Nam KHÔNG có báo cáo thường niên trong hệ thống. Kết quả của "
-            "họ (nếu có) chỉ là đoạn mô tả do VCI biên soạn — không nói gì về rủi ro hay "
-            "chiến lược do doanh nghiệp tự công bố."
+            "Kết quả mục AR là trích từ BÁO CÁO THƯỜNG NIÊN tiếng Việt do doanh nghiệp "
+            "công bố (ghi rõ năm và số trang). Kết quả mục PROFILE chỉ là đoạn mô tả do "
+            "VCI biên soạn. Nếu không có kết quả AR nào thì hệ thống CHƯA có báo cáo "
+            "thường niên của doanh nghiệp đó — hãy nói thẳng điều đó."
         ) if vn_tickers else None,
         "results": [
             {
@@ -459,6 +493,15 @@ def search_filings(
                 "text": h["text"], "chunk_id": h["chunk_id"],
             }
             for h in hits
+        ] + [
+            {
+                "ticker": h["ticker"], "company": h["company"],
+                "fiscal_year": h.get("fiscal_year"), "item": "AR",
+                "item_title": h["item_title"], "score": round(h["score"], 3),
+                "text": h["text"], "chunk_id": h["chunk_id"],
+                "source_note": "Trích báo cáo thường niên do doanh nghiệp công bố.",
+            }
+            for h in report_hits
         ] + [
             {
                 "ticker": h["ticker"], "company": h["company"],
@@ -644,12 +687,14 @@ def company_coverage(company: str) -> Dict[str, Any]:
     text_chunks = is_text_indexed(ticker, vectors())
     is_vn = ticker.endswith(".VN")
     profile_chunks = profiles().count_for(ticker) if is_vn else 0
+    report_chunks = vn_reports().count_for(ticker) if is_vn else 0
 
     summary = [
         f"số liệu tài chính: {years} năm ({first}–{last})" if years
         else "chưa có số liệu tài chính",
-        f"văn bản báo cáo thường niên (10-K): {text_chunks} đoạn" if text_chunks
-        else "CHƯA có văn bản báo cáo thường niên",
+        f"văn bản báo cáo thường niên (10-K, SEC): {text_chunks} đoạn" if text_chunks
+        else (f"báo cáo thường niên tiếng Việt: {report_chunks} đoạn" if report_chunks
+              else "CHƯA có văn bản báo cáo thường niên"),
         f"quan hệ trích từ hồ sơ: {knowledge}" if knowledge
         else "chưa có quan hệ trích từ hồ sơ",
     ]
@@ -670,6 +715,7 @@ def company_coverage(company: str) -> Dict[str, Any]:
         "knowledge_relations": knowledge,
         "ownership_relations": ownership,
         "profile_chunks": profile_chunks,
+        "annual_report_chunks": report_chunks,
         "summary": summary,
         "alternatives": [{"ticker": c["ticker"], "name": c["name"]} for c in cands[1:4]],
     }

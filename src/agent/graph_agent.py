@@ -79,10 +79,13 @@ TOOL_SPECS = {
                  "currency": "str optional — 'USD' (default) or 'VND' for Vietnam"},
     },
     "search_filings": {
-        "desc": ("Semantic search over 10-K text. Use for qualitative questions: strategy, "
-                 "risks, competition, what management said. For a VIETNAMESE company it only "
-                 "returns a short company PROFILE (what the business does): there are no "
-                 "Vietnamese annual reports, so it cannot answer risk or strategy questions."),
+        "desc": ("Semantic search over annual-report text. Use for qualitative questions: "
+                 "strategy, risks, competition, what management said. US companies: 10-K "
+                 "sections. VIETNAMESE companies: the Vietnamese annual report (Báo cáo "
+                 "thường niên) when the system has it, plus a short company profile. Write "
+                 "the query in ENGLISH either way — Vietnamese text is matched across "
+                 "languages. Do NOT pass `items` for a Vietnamese company: their reports "
+                 "have no Item codes and the filter would return nothing."),
         "args": {
             "query": "str — search in ENGLISH, the filings are English",
             "companies": "list[str] optional",
@@ -219,10 +222,13 @@ Quy tắc bắt buộc:
    hai trong danh mục) — TUYỆT ĐỐI không được diễn giải thành hợp tác, cung ứng, cạnh
    tranh hay bất kỳ quan hệ làm ăn nào. Phải nói rõ đó là quan hệ sở hữu, kèm tỷ lệ và
    ngày công bố nếu có.
-4d. Kết quả `search_filings` có `item` = "PROFILE" là ĐOẠN MÔ TẢ DOANH NGHIỆP do VCI biên
-   soạn, KHÔNG phải trích từ báo cáo thường niên. Chỉ dùng nó để nói doanh nghiệp làm gì.
-   Nếu người dùng hỏi về rủi ro, chiến lược hay ban lãnh đạo nói gì của một doanh nghiệp
-   Việt Nam, phải nói thẳng: hệ thống chưa có báo cáo thường niên của doanh nghiệp đó.
+4d. Kết quả `search_filings` có hai loại nguồn cho doanh nghiệp Việt Nam, KHÔNG được
+   lẫn lộn. Mục `AR` là trích từ BÁO CÁO THƯỜNG NIÊN do chính doanh nghiệp công bố —
+   dùng được cho rủi ro, chiến lược, ban lãnh đạo; khi trích phải ghi rõ năm và số
+   trang (ví dụ: FPT BCTN 2025, trang 87). Mục `PROFILE` chỉ là đoạn mô tả do VCI biên
+   soạn, chỉ dùng để nói doanh nghiệp làm gì. Nếu người dùng hỏi về rủi ro hay chiến
+   lược mà KHÔNG có kết quả `AR` nào, phải nói thẳng: hệ thống chưa có báo cáo thường
+   niên của doanh nghiệp đó, chứ không được suy từ đoạn mô tả.
 5. Nếu hệ thống vừa tự đi lấy dữ liệu (trường just_ingested), hãy nói với người dùng.
 6. Không đưa ra khuyến nghị mua/bán. Chỉ trình bày dữ kiện và phân tích.
 

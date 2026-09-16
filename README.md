@@ -171,6 +171,7 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/12_load_vietnam_metrics.py --resume --apply      # 1.532 mã · ~37 phút
 .venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py --resume --apply # cổ đông · ~9 phút
 .venv/Scripts/python.exe scripts/14_load_vietnam_profiles.py --resume --apply     # mô tả DN · ~11 phút
+.venv/Scripts/python.exe scripts/15_load_vietnam_annual_reports.py --apply   # báo cáo thường niên · ~12 phút
 
 # --- Đánh giá ---
 .venv/Scripts/python.exe scripts/07_build_testset.py                 # sinh 34 câu hỏi
@@ -516,6 +517,11 @@ nằm ở một collection Qdrant riêng để không chen vào kết quả tìm
 *"doanh nghiệp này làm gì"*, **không** đủ để trả lời *"doanh nghiệp nêu rủi ro gì"* — báo
 cáo thường niên Việt Nam vẫn chưa có trong hệ thống.
 
+Và từ 2026-09-16, **22/30 mã VN30 có cả BÁO CÁO THƯỜNG NIÊN tiếng Việt** (40.138 đoạn,
+tải từ kho tĩnh của VietStock). Hỏi *"FPT nêu rủi ro gì"* giờ trả lời được, kèm số trang
+để đối chiếu với file gốc. 8 mã còn lại: 4 mã chỉ có bản scan ảnh, 4 mã không công bố theo
+mẫu đường dẫn đó — script nói rõ từng lý do thay vì im lặng bỏ qua.
+
 ```
 FPT   FPT Corporation                      70,1 nghìn tỷ VND (2025)
 HPG   Hoa Phat Group                      156,1 nghìn tỷ VND
@@ -585,6 +591,7 @@ chiều thay vì 384), tức là nhúng lại toàn bộ 23.869 đoạn vào m�
 .venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py                  # chạy thử
 .venv/Scripts/python.exe scripts/13_load_vietnam_shareholders.py --resume --apply # ghi thật
 .venv/Scripts/python.exe scripts/14_load_vietnam_profiles.py --resume --apply     # mô tả DN · ~11 phút
+.venv/Scripts/python.exe scripts/15_load_vietnam_annual_reports.py --apply   # báo cáo thường niên · ~12 phút
 .venv/Scripts/python.exe tests/test_vietnam.py                         # 23 ca kiểm thử
 ```
 
