@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import settings  # noqa: F401 — chỉnh stdout sang UTF-8 cho Windows
+from src.ingest.on_demand import _resolve_vn
 from src.agent.tools import (
     company_coverage, compare_financials, lookup_financials, search_filings,
 )
@@ -253,7 +254,39 @@ def main() -> int:
 
     print()
     print("=" * 78)
-    total = len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US) + 1 + 5 + 6
+    print("NHÓM 8 — cách người Việt thật sự gọi tên doanh nghiệp (khớp theo cụm con)")
+    print("=" * 78)
+    # Trước khi có tầng khớp lõi, cả bốn ca đầu đều ra not_found — và agent trả lời
+    # "không có dữ liệu" dù báo cáo thường niên nằm sẵn trong kho.
+    for q, want in [("Ngân hàng Á Châu", "ACB.VN"), ("Sữa Việt Nam", "VNM.VN"),
+                    ("Ngân hàng Tiên Phong", "TPB.VN"), ("Duc Giang Chemicals", "DGC.VN"),
+                    ("Tập đoàn Vingroup", "VIC.VN"), ("Ngân hàng Ngoại thương", "VCB.VN")]:
+        r = resolve_company(q)
+        got = (r.get("best") or {}).get("ticker")
+        good = r.get("status") == "ok" and got == want
+        print(f"  {'đúng' if good else 'SAI '}  {q:<24} -> {got or r.get('status')}")
+        if not good:
+            failures.append(f"{q!r} lẽ ra là {want}, nhận được {got or r.get('status')}")
+
+    # Tên dùng chung KHÔNG được thành một kết quả duy nhất. Quét 4.566 dạng tên tìm ra
+    # đúng ba ca này, trong đó "Hàng Hải Việt Nam" từng ra MVN với status ok — chọn sai
+    # Tổng công ty Hàng hải thay cho Maritime Bank mà không báo gì.
+    for q, must_include in [("Hàng Hải Việt Nam", "MSB.VN"), ("Sài Gòn – Hà Nội", "SHB.VN"),
+                            ("Phương Đông", "OCB.VN"), ("Ngân hàng", "ACB.VN")]:
+        r = resolve_company(q)
+        opts = [o["ticker"] for o in r.get("options", [])]
+        full = [x["ticker"] for x in _resolve_vn(q)]
+        good = r.get("status") == "ambiguous" and must_include in full
+        print(f"  {'đúng' if good else 'SAI '}  {q:<24} -> {r.get('status')}, "
+              f"có {must_include}: {must_include in full}")
+        if not good:
+            failures.append(f"{q!r} lẽ ra phải nhập nhằng và có {must_include}; "
+                            f"nhận được {r.get('status')} {opts}")
+
+    print()
+    print("=" * 78)
+    total = (len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US)
+             + 1 + 5 + 6 + 10)
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for item in failures:

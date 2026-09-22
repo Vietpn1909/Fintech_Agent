@@ -37,7 +37,9 @@ from src.ingest.on_demand import resolve_company
 # Ngoặc KHÔNG được trở thành đường vòng qua lớp chặn: hai vế chỉ hai doanh nghiệp khác
 # nhau, hoặc một vế vốn đã nhập nhằng, thì vẫn phải hỏi lại chứ không tự chọn.
 MUST_NOT_AUTOPICK = [
-    ("ACB (Ngân hàng Á Châu)", "ACB nhập nhằng Mỹ/Việt, phần chú thích không khớp tên nào"),
+    # Hai vế MÂU THUẪN nhau: "ACB" là Aurora Cannabis hoặc Ngân hàng Á Châu, không bao giờ
+    # là Apple. Từng ra AAPL với status ok — vế chắc chắn đè lên vế nhập nhằng.
+    ("ACB (Apple)", "hai vế chỉ hai doanh nghiệp khác nhau"),
     ("khong ton tai xyz (abc def)", "cả hai vế đều vô nghĩa"),
 ]
 
@@ -98,6 +100,9 @@ MUST_ACCEPT = [
     ("Masan (MSN)", "MSN.VN"),
     ("Apple (AAPL)", "AAPL"),
     ("Vinamilk — VNM", "VNM.VN"),          # gạch dài thay cho ngoặc
+    # Vế chú thích GỠ nhập nhằng cho vế mã: "ACB" có hai lựa chọn, "Ngân hàng Á Châu" chọn
+    # đúng một trong hai. Trước khi có tầng khớp lõi thì vế chú thích không khớp gì cả.
+    ("ACB (Ngân hàng Á Châu)", "ACB.VN"),
 ]
 
 

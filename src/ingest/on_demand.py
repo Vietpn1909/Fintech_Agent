@@ -333,26 +333,92 @@ def _resolve_vn(query: str) -> List[Dict[str, str]]:
 
     # --- Tầng 2: khớp chính xác một trong các dạng tên ---
     exact = [
-        {**info, "match": "exact", "confidence": "high"}
-        for info in table.values()
-        if any(
-            _simplify(name) == simple
-            for name in [info["name"], *info.get("aliases", [])]
-        )
+        info for info in table.values()
+        if any(_simplify(name) == simple for name in [info["name"], *info.get("aliases", [])])
     ]
-    if exact:
-        return exact
 
     # --- Tầng 3: tên đầy đủ bắt đầu bằng cụm đã gõ ---
     #
-    # Giữ lại vì nó bắt được "Hoa Phat" -> "Hoa Phat Group Joint Stock Company", kiểu gõ
-    # rất phổ biến. Nhưng hạ nhãn xuống `prefix` và nếu ra nhiều hơn một thì `resolve_company`
-    # sẽ báo nhập nhằng — không được tự chọn như trước.
-    return [
-        {**info, "match": "prefix", "confidence": "high"}
+    # Bắt được "Hoa Phat" -> "Hoa Phat Group Joint Stock Company", kiểu gõ rất phổ biến.
+    # Ra nhiều hơn một thì `resolve_company` báo nhập nhằng — không được tự chọn.
+    prefix = [info for info in table.values()
+              if _simplify(info["name"]).startswith(simple + " ")]
+
+    # --- Tầng 4: khớp trên PHẦN LÕI của tên, sau khi bỏ từ pháp lý ---
+    #
+    # Ba tầng trên trượt đúng những cách người Việt hay gọi tên doanh nghiệp:
+    #     "Ngân hàng Á Châu"   thiếu "Thương mại Cổ phần" ở giữa "Ngân hàng TMCP Á Châu"
+    #     "Sữa Việt Nam"       nằm sau "Công ty Cổ phần" trong tên của Vinamilk
+    #     "Duc Giang Chemicals" trong khi VCI viết liền "Ducgiang Chemicals"
+    # So theo TỪ chứ không theo ký tự: "an" không được khớp vào giữa "thanh" — lỗi
+    # Acer→Macerich chính là khớp ký tự bừa kiểu đó.
+    core = _core_words(simple)
+    forms = {
+        info["ticker"]: [_core_words(_simplify(n)) for n in [info["name"], *info.get("aliases", [])]]
         for info in table.values()
-        if _simplify(info["name"]).startswith(simple + " ")
-    ]
+    }
+    by_ticker = {info["ticker"]: info for info in table.values()}
+
+    # 4a. Lõi TRÙNG KHÍT lõi của một dạng tên ("Tập đoàn Vingroup" == "Vingroup JSC").
+    #     Trùng khít nên một từ cũng đủ an toàn.
+    whole = [by_ticker[t] for t, fs in forms.items() if core and any(f == core for f in fs)]
+
+    # 4b. Cụm lõi nằm TRONG một dạng tên, theo ranh giới từ — chỉ khi cụm đủ dài để mang
+    #     bản sắc (ít nhất hai từ, 6 ký tự). "Ngân hàng" trơn sẽ khớp hai chục ngân hàng
+    #     và thành nhập nhằng, đúng như phải thế.
+    inside: List[Dict[str, str]] = []
+    if len(core) >= 2 and len(" ".join(core)) >= 6:
+        needle = " " + " ".join(core) + " "
+        inside = [by_ticker[t] for t, fs in forms.items()
+                  if any(needle in " " + " ".join(f) + " " for f in fs)]
+        # 4c. Không phân biệt dấu cách, và CHỈ khi cụm liền từ 12 ký tự trở lên. Lỗi
+        #     Acer→Macerich là trùng 4 ký tự; ở 12 ký tự trùng tình cờ gần như không có.
+        if not inside:
+            compact = "".join(core)
+            if len(compact) >= 12:
+                inside = [by_ticker[t] for t, fs in forms.items()
+                          if any(compact in "".join(f) for f in fs)]
+
+    # ⚠️ TẦNG CHẶT ĐƯỢC ƯU TIÊN, NHƯNG KHÔNG ĐƯỢC CHE MẤT MÃ ĐÚNG Ở TẦNG SAU.
+    #
+    # Bản trước trả về ngay khi một tầng có kết quả. Quét toàn bộ 4.566 dạng tên tiếng
+    # Việt thì ra 3 ca chỉ về doanh nghiệp KHÁC, cả ba cùng một kiểu — tên vốn dùng chung:
+    #     "Hàng Hải Việt Nam"  -> chỉ MVN (Tổng công ty Hàng hải), mất MSB (Maritime Bank)
+    #                             status ok, một kết quả duy nhất: chọn sai mà không báo
+    #     "Sài Gòn – Hà Nội"   -> BSH (bia) + SHS (chứng khoán), mất SHB (ngân hàng)
+    #     "Phương Đông"        -> PDC + PDV, mất OCB (Ngân hàng Phương Đông)
+    # Ca đầu là loại tệ nhất. Hai ca sau thì agent sẽ hỏi lại người dùng "BSH hay SHS?" —
+    # một câu hỏi mà cả hai lựa chọn đều sai.
+    #
+    # Nên gộp: mọi mã khớp ở tầng chặt, CỘNG mọi mã chứa trọn cụm lõi. Có hơn một thì
+    # `resolve_company` báo nhập nhằng kèm đủ các lựa chọn, trong đó có mã đúng.
+    #
+    # Riêng tầng 2 (gõ KHÍT tên đầy đủ hoặc tên thương hiệu) thì không gộp: người dùng đã
+    # nói đúng tên một doanh nghiệp, pha thêm các mã chỉ "chứa" cụm đó là biến một câu trả
+    # lời chắc chắn thành câu hỏi lại. Đo: gộp cả tầng 2 làm 145 tên đang nhận đúng-duy-
+    # nhất phải hỏi lại, mà không cứu thêm được ca sai nào.
+    if exact:
+        return [{**info, "match": "exact", "confidence": "high"} for info in exact]
+    first, label = ((prefix, "prefix") if prefix else (whole, "core") if whole else ([], ""))
+    out: Dict[str, Dict[str, str]] = {}
+    for info in first:
+        out[info["ticker"]] = {**info, "match": label, "confidence": "high"}
+    for info in inside:
+        out.setdefault(info["ticker"], {**info, "match": "substring", "confidence": "high"})
+    return list(out.values())
+
+
+# Từ pháp lý và loại hình doanh nghiệp: có trong gần như mọi tên nên không phân biệt được
+# ai với ai. Bỏ ở cả hai phía trước khi so cụm con. KHÔNG bỏ "ngân hàng", "bia", "thép" —
+# những từ đó nói doanh nghiệp làm gì, và "ngân hàng Á Châu" khác hẳn "Á Châu" trơn.
+_FILLER = frozenset("""
+    cong ty co phan tap doan tong tnhh mtv tmcp thuong mai ctcp jsc joint stock company
+    corporation corp group holdings holding limited ltd inc plc
+""".split())
+
+
+def _core_words(simplified: str) -> List[str]:
+    return [w for w in simplified.split() if w not in _FILLER]
 
 
 def _suggest(query: str, k: int = 3) -> List[Dict[str, str]]:
@@ -511,6 +577,20 @@ def resolve_company(query: str, limit: int = 5, depth: int = 0) -> Dict[str, Any
                 if not solved and unclear:
                     return unclear[0]
                 tickers = {s["best"]["ticker"] for s in solved}
+                # ⚠️ Vế nhập nhằng không được bỏ qua chỉ vì một vế khác đã chắc chắn. Đo:
+                # "ACB (Apple)" từng ra AAPL với status ok — vế "ACB" chỉ có hai lựa chọn
+                # là Aurora Cannabis và Ngân hàng Á Châu, không có Apple, nên hai vế đang
+                # MÂU THUẪN nhau chứ không bổ sung cho nhau. Chỉ nhận khi mã chắc chắn nằm
+                # trong lựa chọn của MỌI vế nhập nhằng — như "ACB (Ngân hàng Á Châu)".
+                for part in unclear:
+                    allowed = {o["ticker"] for o in part.get("options", [])}
+                    if tickers and not tickers <= allowed:
+                        return {
+                            "status": "ambiguous", "query": query,
+                            "options": [s["best"] for s in solved] + part.get("options", []),
+                            "hint": (f"Các phần của '{raw}' chỉ về những doanh nghiệp khác "
+                                     f"nhau. Hãy hỏi lại người dùng ý nào."),
+                        }
                 if len(tickers) == 1:
                     best = solved[0]
                     best["note"] = f"đã bỏ phần trong ngoặc của '{raw}' để khớp"

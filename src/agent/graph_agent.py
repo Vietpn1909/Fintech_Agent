@@ -88,7 +88,13 @@ TOOL_SPECS = {
                  "have no Item codes and the filter would return nothing."),
         "args": {
             "query": "str — search in ENGLISH, the filings are English",
-            "companies": "list[str] optional",
+            # ⚠️ Đo thật: hỏi "Chiến lược của Hóa chất Đức Giang" thì agent tự dịch thành
+            # "Duc Giang Chemicals" — tên không khớp dạng nào trong dữ liệu (VCI viết liền
+            # "Ducgiang"), công cụ trả not_found, agent kết luận "không có dữ liệu". Tên
+            # người dùng gõ là dạng đáng tin nhất; mọi bản dịch là một lần đoán thêm.
+            "companies": ("list[str] optional — copy company names EXACTLY as the user wrote "
+                          "them, in the user's language (e.g. \"Hóa chất Đức Giang\"). "
+                          "NEVER translate or romanize a Vietnamese name into English."),
             "items": 'list of STRINGS optional, e.g. ["1A"] — "1"=Business, "1A"=Risk Factors, "7"=MD&A, "3"=Legal. Risk/competition questions -> use "1A". Never pass numbers.',
         },
     },
