@@ -517,7 +517,8 @@ nằm ở một collection Qdrant riêng để không chen vào kết quả tìm
 *"doanh nghiệp này làm gì"*, **không** đủ để trả lời *"doanh nghiệp nêu rủi ro gì"* — báo
 cáo thường niên Việt Nam vẫn chưa có trong hệ thống.
 
-Và từ 2026-09-16, **30/30 mã VN30 có cả BÁO CÁO THƯỜNG NIÊN tiếng Việt** (48.438 đoạn).
+Và từ 2026-09-16, **30/30 mã VN30 có cả BÁO CÁO THƯỜNG NIÊN tiếng Việt** (50.214 đoạn,
+28/30 mã dùng báo cáo 2024–2025).
 Hỏi *"FPT nêu rủi ro gì"* giờ trả lời được, kèm số trang để đối chiếu với file gốc.
 
 Ba nguồn, xếp theo độ tin cậy, và script tự chọn bản mới nhất đọc được:

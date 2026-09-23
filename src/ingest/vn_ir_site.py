@@ -63,16 +63,17 @@ SITES: Dict[str, str] = {
 }
 
 # Đã đo và KHÔNG dùng được bằng HTTP thường — danh sách tài liệu do JavaScript dựng.
-# Giữ lại ở đây thay vì xóa, vì "đã thử rồi, không được" là thông tin có giá trị.
+# Bảy mã này nay do `vn_ir_browser.py` lo (Playwright). Giữ danh sách ở đây để ai đọc
+# mô-đun này biết vì sao chúng vắng mặt, thay vì tưởng là bỏ sót.
 JS_ONLY: Dict[str, str] = {
-    "ACB": "https://acb.com.vn/quan-he-co-dong/bao-cao-thuong-nien",
-    "HDB": "https://hdbank.com.vn (trang báo cáo trả 404 cho HTTP thường)",
-    "SHB": "https://www.shb.com.vn (trả 403 cho HTTP thường)",
-    "SSB": "https://www.seabank.com.vn/nha-dau-tu/bao-cao-thuong-nien",
-    "TPB": "https://tpb.vn/nha-dau-tu/bao-cao-thuong-nien",
-    "VIB": "https://www.vib.com.vn (trang báo cáo trả vỏ SPA 1,9 KB)",
-    "GAS": "https://www.pvgas.com.vn (trang báo cáo trả 404 cho HTTP thường)",
-    "DGC": "https://dgc.com.vn (WordPress, REST API trả 401)",
+    "ACB": "danh sách nằm trong API Next.js, chỉ gọi khi bấm tab năm",
+    "GAS": "bài viết từng năm; link tải bản 2025 chỉ trả 25 KB rỗng, báo cáo thật là sách lật",
+    "HDB": "link thẳng nhưng nạp trễ",
+    "SHB": "bài viết từng năm trên WordPress",
+    "SSB": "bài viết từng năm, file nằm trên cloud-cdn riêng",
+    "TPB": "tab năm, danh sách tải về khi bấm",
+    "VIB": "link thẳng nhưng nạp trễ; từ 2023 trở đi đều là BẢN SCAN nên vẫn kẹt ở 2022",
+    "DGC": "WordPress khóa REST API (401) — mọi năm đều là bản scan, xử lý bằng OCR ở bước 16",
 }
 
 # Link phải TRÔNG NHƯ báo cáo thường niên. Không nhận mọi file .pdf trên trang, vì trang

@@ -258,6 +258,33 @@ def is_annual_report(pages: List[str]) -> Tuple[bool, str]:
     return True, ""
 
 
+def year_in_text(pages: List[str], scan: int = 25) -> Optional[int]:
+    """Năm mà CHÍNH BÁO CÁO tự ghi, đọc từ chữ bên trong file. None nếu không rõ.
+
+    ⚠️ CHỐT CUỐI CHO NĂM TRÍCH DẪN. Mọi cách đọc năm từ bên ngoài đều có thể sai: tên file
+    của TPBank là "BCTN 2026 TV 21.4 VIEW.pdf" trong khi bìa báo cáo ghi rõ "BÁO CÁO
+    THƯỜNG NIÊN 2025" — 2026 là năm công bố. Thư mục của SHB là "2026/04/" cho báo cáo
+    2025. Chữ trong chính tài liệu là nguồn không qua trung gian nào.
+
+    Đếm những năm đứng NGAY CẠNH cụm "thường niên"/"năm tài chính"/"Annual Report" trong
+    vài chục trang đầu, rồi lấy năm xuất hiện nhiều nhất. Đo trên TPBank: 2025 xuất hiện
+    16 lần cạnh cụm đó, 2023 bốn lần, 2026 một lần — cách biệt rất rõ.
+    """
+    from collections import Counter
+
+    text = " ".join(pages[:scan])
+    near = re.findall(
+        r"(?:thường niên|thuong nien|năm tài chính|BCTN|Annual Report)[^0-9]{0,20}(20[12]\d)",
+        text, re.I)
+    if not near:
+        return None
+    counts = Counter(int(y) for y in near).most_common()
+    # Chỉ nhận khi năm đứng đầu vượt trội; ngang ngửa nhau thì thà không biết.
+    if len(counts) > 1 and counts[0][1] < counts[1][1] * 2:
+        return None
+    return counts[0][0]
+
+
 def _sentences(text: str) -> List[str]:
     text = re.sub(r"\s+", " ", text).strip()
     parts = re.split(r"(?<=[.!?…;])\s+", text)

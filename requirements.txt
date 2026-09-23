@@ -48,3 +48,8 @@ grandalf==0.8
 # Gói tiếng Việt tải về data/tessdata/ từ tesseract-ocr/tessdata_best (12 MB) — bản
 # "best" chứ không phải "fast", vì dấu tiếng Việt là chỗ mô hình nhanh sai nhiều nhất,
 # mà dấu sai thì chữ sai nghĩa. Ảnh trang do pypdfium2 dựng (đã có sẵn ở trên).
+
+# Trình duyệt thật cho 7 trang quan hệ cổ đông dựng bằng JavaScript (ACB, GAS, HDB, SHB,
+# SSB, TPB, VIB). Chỉ dùng ở bước 15 khi cần; thêm `--no-browser` để bỏ qua cho nhanh.
+# Sau khi pip install phải tải nhân trình duyệt: python -m playwright install chromium
+playwright==1.63.0

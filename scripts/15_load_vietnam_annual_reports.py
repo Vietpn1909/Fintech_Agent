@@ -37,9 +37,10 @@ from rich.table import Table
 
 from config.settings import settings  # noqa: F401 — chỉnh stdout sang UTF-8 cho Windows
 from src.graph.store import GraphStore
-from src.ingest import vn_ir_site
+from src.ingest import vn_ir_browser, vn_ir_site
 from src.ingest.vn_annual_report import (
     chunk_report, download, extract_pages, find_reports, is_annual_report, prose_pages,
+    year_in_text,
 )
 from src.vector.store import (
     VN_PROFILE_COLLECTION, VN_REPORT_COLLECTION, VN_REPORT_DIM, VN_REPORT_MODEL, VectorStore,
@@ -58,6 +59,8 @@ VN30 = [
 def main() -> None:
     ap = argparse.ArgumentParser(description="Nap bao cao thuong nien Viet Nam")
     ap.add_argument("--apply", action="store_true", help="ghi vao Qdrant (mac dinh chay thu)")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="bo qua nguon can trinh duyet (Playwright) cho nhanh")
     ap.add_argument("--limit", type=int, default=None, help="chi xu ly N ma dau tien")
     ap.add_argument("--symbols", default=None, help="danh sach ma, cach nhau bang dau phay")
     # Vì sao lùi tới 2019 chứ không dừng ở 2023: tám mã VN30 từng bị loại vì "không có
@@ -96,7 +99,7 @@ def main() -> None:
     console.print(f"[cyan]Xử lý {len(symbols)} mã[/] · thử các năm {years} · "
                   f"file tải về: [dim]{RAW_DIR}[/]")
 
-    loaded, rejected, all_chunks = [], [], []
+    loaded, rejected, all_chunks, renamed = [], [], [], []
     started = time.time()
     with Progress(
         TextColumn("[progress.description]{task.description}"), BarColumn(),
@@ -117,9 +120,13 @@ def main() -> None:
                 # Gộp rồi sắp theo năm giảm dần; cùng một năm thì giữ bản của doanh
                 # nghiệp. Vẫn thử lần lượt vì bản nào cũng có thể là bản scan.
                 site = vn_ir_site.find_reports(symbol)
+                browsed = (vn_ir_browser.find_reports(symbol)
+                           if not args.no_browser and symbol in vn_ir_browser.SITES else [])
                 static = find_reports(symbol, info.get("exchange") or "HOSE", years)
                 merged = {}
-                for found in list(static) + list(site):   # site ghi đè static cùng năm
+                # Thứ tự ghi đè = thứ tự tin cậy tăng dần: kho trung gian, rồi trang doanh
+                # nghiệp đọc bằng HTTP thường, rồi trang doanh nghiệp đọc bằng trình duyệt.
+                for found in list(static) + list(site) + list(browsed):
                     merged[found["year"]] = found
                 candidates = [merged[y] for y in sorted(merged, reverse=True)]
                 if not candidates:
@@ -132,9 +139,9 @@ def main() -> None:
                 picked = None
                 for found in candidates:
                     src = found.get("source", "vietstock")
-                    suffix = "_ir" if src == "ir_site" else ""
+                    suffix = {"ir_site": "_ir", "ir_browser": "_web"}.get(src, "")
                     path = RAW_DIR / f"{symbol}_{found['year']}{suffix}.pdf"
-                    fetch = vn_ir_site.download if src == "ir_site" else download
+                    fetch = download if src == "vietstock" else vn_ir_site.download
                     size = fetch(found["url"], path)
                     pages = extract_pages(path)
                     ok, why = is_annual_report(pages)
@@ -145,6 +152,17 @@ def main() -> None:
                 if not picked:
                     continue
                 found, size, pages = picked
+
+                # ⚠️ NĂM TRÍCH DẪN LẤY TỪ CHÍNH TÀI LIỆU KHI ĐỌC ĐƯỢC.
+                #
+                # Tên file và thư mục đều có thể mang năm CÔNG BỐ chứ không phải năm báo
+                # cáo: TPBank đặt tên "BCTN 2026 TV.pdf" cho báo cáo mà bìa ghi rõ "BÁO
+                # CÁO THƯỜNG NIÊN 2025". Sai một năm là mọi trích dẫn từ file này chỉ
+                # người đọc sang đúng một tài liệu khác.
+                inside = year_in_text(pages)
+                if inside and inside != found["year"]:
+                    renamed.append((symbol, found["year"], inside))
+                    found = {**found, "year": inside}
                 # Năm cũ đã thử và hỏng thì không còn là "lỗi" nữa khi năm khác đã dùng được
                 rejected[:] = [r for r in rejected if r[0] != symbol]
 
@@ -154,7 +172,8 @@ def main() -> None:
                 all_chunks.extend(chunks)
                 loaded.append({
                     "symbol": symbol, "year": found["year"], "mb": size / 1e6,
-                    "source": "doanh nghiệp" if found.get("source") == "ir_site" else "VietStock",
+                    "source": {"ir_site": "doanh nghiệp", "ir_browser": "DN (trình duyệt)"}
+                              .get(found.get("source"), "VietStock"),
                     "pages": len(pages), "prose": len(prose_pages(pages)),
                     "chunks": len(chunks),
                 })
@@ -179,6 +198,11 @@ def main() -> None:
             f"[bold]{len(loaded)}/{len(symbols)} mã[/] · {len(all_chunks):,} đoạn · "
             f"độ dài đoạn trung vị {int(statistics.median(lens))} ký tự"
         )
+
+    if renamed:
+        console.print("\n[cyan]Sửa năm theo nội dung tài liệu[/] (tên file mang năm công bố):")
+        for symbol, was, now in renamed:
+            console.print(f"   {symbol:<5} {was} -> {now}")
 
     if rejected:
         console.print(f"\n[yellow]Không nạp {len(rejected)} mã[/] — nói rõ lý do chứ không "

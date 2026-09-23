@@ -296,7 +296,7 @@ Chọn `paraphrase-multilingual-MiniLM-L12-v2` (0,22 GB) thay vì `multilingual-
 ### Kết quả
 
 ```
-30/30 mã VN30 · 48.438 đoạn · độ dài đoạn trung vị ~283 ký tự
+30/30 mã VN30 · 50.214 đoạn · 23 mã dùng báo cáo 2025, 5 mã 2024, 2 mã 2022
 kho 10-K giữ nguyên 23.869 đoạn · kho mô tả giữ nguyên 1.527 đoạn
 ```
 
@@ -403,3 +403,44 @@ buộc agent nói rõ với người dùng.
 Bảng số trong báo cáo bị loại khỏi kho văn bản (tỷ lệ chữ số ≥ 15%): số liệu phải đến từ
 XBRL/VCI chứ không phải từ việc mô hình đọc bảng — đúng nguyên tắc của cả dự án.
 
+
+
+### Cập nhật — trình duyệt thật cho 7 trang JavaScript
+
+Mục trên kết luận 7 mã (ACB, GAS, HDB, SHB, SSB, TPB, VIB) cần Playwright mới lấy được.
+Đã làm, và kết quả đúng như dự đoán một nửa:
+
+| Mã | Trước | Sau | Trang dựng kiểu gì |
+|---|---|---|---|
+| ACB | 2021 | **2025** | API Next.js, chỉ gọi khi bấm tab năm |
+| SHB | 2020 | **2025** | bài viết từng năm trên WordPress |
+| SSB | 2019 | **2025** | bài viết từng năm, file trên CDN riêng |
+| TPB | 2020 | **2025** | tab năm, danh sách tải về khi bấm |
+| HDB | 2023 | **2024** | link thẳng nhưng nạp trễ vài giây |
+| GAS | 2022 | 2022 | link tải bản 2025 trả về đúng 25.662 byte — file rỗng |
+| VIB | 2022 | 2022 | có đủ bản 2023–2025 nhưng **cả ba đều là bản scan** |
+
+Hai mã cuối không phải giới hạn của công cụ mà là của thứ doanh nghiệp công bố: PV GAS
+chỉ đăng báo cáo dạng sách lật `/ebook/`, VIB đăng đúng bản scan giống hệt trên VietStock.
+
+**Năm lỗi đáng nhớ, tất cả đều thuộc loại "im lặng cho kết quả sai":**
+
+1. **Tự bấm vào link điều hướng rồi phá trang của chính mình.** Bản đầu bấm mọi phần tử
+   có chữ là một năm, kể cả thẻ `<a href="/...">`. VIB nhảy sang URL cổng WebSphere và
+   mất sạch danh sách vừa dựng: 124 link, 0 PDF — trong khi chỉ cần *chờ mà không bấm*
+   thì có đủ 10 bản. Nay chỉ bấm `div/span/button` và `<a href="#...">`.
+2. **`esg` không khớp `HDB_ESG_Report`** vì gạch dưới là ký tự chữ, nên `` không
+   coi đó là ranh giới. Báo cáo ESG của HDBank lọt qua và suýt bị nạp thành báo cáo
+   thường niên 2025.
+3. **Mẫu tìm PDF cấm khoảng trắng và dấu `\`**, trong khi ACB trả về JSON có escape:
+   `"https:\/\/acb.com.vn\/acbwebsite\/files\/BCTN 2025.pdf"`. Cắt cụt thành
+   `.../files/BCTN` rồi loại vì không còn đuôi `.pdf`.
+4. **Link tải không có đuôi `.pdf`**: PV GAS phát file qua `DocumentDownload.ashx`. Và
+   kiểu MIME nói dối — họ khai `application/octet-stream` cho cả PDF. Phải đọc bốn byte
+   đầu tìm chữ ký `%PDF`, kèm ngưỡng dung lượng để loại công văn CBTT 1,1 MB nằm ngay
+   cạnh và mang tên chứa nguyên cụm "Báo cáo thường niên".
+5. **Tên file mang năm CÔNG BỐ.** TPBank đặt tên `BCTN 2026 TV 21.4 VIEW.pdf` cho tài
+   liệu mà bìa ghi rõ "BÁO CÁO THƯỜNG NIÊN 2025". Thêm `year_in_text()` đọc năm từ chính
+   nội dung tài liệu — đếm năm đứng cạnh cụm "thường niên" trong 25 trang đầu (TPBank:
+   2025 xuất hiện 16 lần, 2023 bốn lần, 2026 một lần) — và năm đó ghi đè năm đoán từ tên
+   file. Sai một năm là mọi trích dẫn chỉ người đọc sang đúng một tài liệu khác.
