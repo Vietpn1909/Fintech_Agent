@@ -274,6 +274,9 @@ class AgentState(TypedDict, total=False):
     # Hàm nhận từng mẩu chữ của câu trả lời, do phía web truyền vào. Không truyền thì
     # khối trả lời chạy y như cũ, không stream.
     on_token: Any
+    # Các lượt trước trong cùng phiên: [{"role": "user"|"assistant", "content": ...}].
+    # Rỗng thì agent chạy y hệt bản một-lượt cũ.
+    history: List[Dict[str, str]]
 
 
 def _truncate(obj: Any, limit: int = 3500) -> str:
@@ -292,13 +295,65 @@ def _truncate(obj: Any, limit: int = 3500) -> str:
 # ---------------------------------------------------------------- các khối xử lý
 
 
+# ⚠️ HỎI TIẾP LÀ CHUYỆN BÌNH THƯỜNG, VÀ NÓ HỎNG THEO KIỂU KHÓ THẤY.
+#
+# Bản một-lượt trả lời đúng "Doanh thu FPT 2025 là bao nhiêu?" rồi tắc ở câu kế tiếp
+# "còn năm trước thì sao?" — không có chủ ngữ thì không biết đang hỏi doanh nghiệp nào.
+# Nhưng nó KHÔNG báo lỗi: khối định tuyến vẫn chọn một công cụ, vẫn trả về một câu trả
+# lời, chỉ là về một doanh nghiệp nào đó nó tự đoán.
+#
+# Vì vậy ngữ cảnh phải vào khối ĐỊNH TUYẾN chứ không chỉ khối viết câu: chỗ cần biết
+# "FPT" là chỗ chọn tham số cho công cụ. Đưa muộn hơn thì công cụ đã lấy sai dữ liệu rồi.
+#
+# Chỉ giữ vài lượt gần nhất và cắt ngắn từng lượt. Model local chạy cửa sổ 16k, mà lịch
+# sử dài sẽ đẩy chính chỉ dẫn hệ thống ra ngoài cửa sổ — đúng cái bẫy đã mô tả ở
+# `_truncate`, chỉ khác nguồn gây tràn.
+HISTORY_TURNS = 6
+HISTORY_CHARS = 700
+
+
+def recent_history(state: "AgentState") -> List[Dict[str, str]]:
+    turns = [m for m in (state.get("history") or [])
+             if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()]
+    return turns[-HISTORY_TURNS:]
+
+
+def history_block(state: "AgentState") -> str:
+    """Vài lượt gần nhất dạng chữ, để nhét vào prompt. Rỗng nếu đây là câu đầu phiên."""
+    turns = recent_history(state)
+    if not turns:
+        return ""
+    lines = []
+    for turn in turns:
+        who = "Người dùng" if turn["role"] == "user" else "Trợ lý"
+        text = " ".join((turn.get("content") or "").split())[:HISTORY_CHARS]
+        lines.append(f"{who}: {text}")
+    return "\n".join(lines)
+
+
+def _routing_input(state: "AgentState") -> str:
+    """Câu hỏi kèm ngữ cảnh, và yêu cầu model gỡ tham chiếu trước khi chọn tham số."""
+    block = history_block(state)
+    if not block:
+        return f"User question (may be in Vietnamese):\n{state['question']}"
+    return (
+        "Earlier turns in this conversation (context only):\n"
+        f"{block}\n\n"
+        "Latest user question (may be in Vietnamese, and may refer back to the turns "
+        f"above by pronoun or ellipsis):\n{state['question']}\n\n"
+        "Before choosing tool arguments, resolve every reference to a company, year or "
+        "metric using the turns above. If the latest question names no company but an "
+        "earlier turn did, use that company."
+    )
+
+
 def node_route(state: AgentState) -> AgentState:
     """Khối 1 — LLM chọn công cụ."""
     started = time.time()
     result = chat_json(
         [
             {"role": "system", "content": ROUTER_PROMPT},
-            {"role": "user", "content": f"User question (may be in Vietnamese):\n{state['question']}"},
+            {"role": "user", "content": _routing_input(state)},
         ],
         json_schema=ROUTER_SCHEMA,
         model=settings.llm_reasoning_model,
@@ -531,9 +586,16 @@ def node_answer(state: AgentState) -> AgentState:
     started = time.time()
     messages = [
         {"role": "system", "content": ANSWER_PROMPT},
-        {"role": "user", "content":
-            f"Câu hỏi: {state['question']}\n\n"
-            f"Dữ liệu công cụ trả về:\n{_truncate(state.get('observations', []), 9000)}"},
+        {"role": "user", "content": "".join(filter(None, [
+            # Ngữ cảnh để câu văn nối được với lượt trước ("như đã nêu ở trên"). Dữ
+            # liệu thì VẪN chỉ lấy từ `observations` của lượt này — lượt trước là lời
+            # văn, không phải nguồn. Trộn hai thứ đó là mở đường cho sai số của một
+            # lượt tự nhân lên qua mọi lượt sau.
+            (f"Các lượt trước (chỉ để hiểu ngữ cảnh, KHÔNG phải nguồn dữ liệu):\n"
+             f"{history_block(state)}\n\n") if history_block(state) else None,
+            f"Câu hỏi: {state['question']}\n\n",
+            f"Dữ liệu công cụ trả về:\n{_truncate(state.get('observations', []), 9000)}",
+        ]))},
     ]
     common = dict(
         model=settings.llm_reasoning_model,
@@ -641,14 +703,21 @@ def build_agent():
 _agent = None
 
 
-def ask(question: str, verbose: bool = False) -> Dict[str, Any]:
-    """Điểm vào chính: đặt câu hỏi, nhận câu trả lời kèm dấu vết suy luận."""
+def ask(question: str, verbose: bool = False,
+        history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """Điểm vào chính: đặt câu hỏi, nhận câu trả lời kèm dấu vết suy luận.
+
+    `history` là các lượt trước trong cùng phiên, dạng [{"role", "content"}]. Bỏ trống
+    thì hành vi giống hệt bản một-lượt cũ, nên mọi script và bộ đánh giá đang có không
+    phải sửa gì.
+    """
     global _agent
     if _agent is None:
         _agent = build_agent()
 
     started = time.time()
-    final = _agent.invoke({"question": question, "round": 0, "observations": [], "trace": []})
+    final = _agent.invoke({"question": question, "round": 0, "observations": [],
+                           "trace": [], "history": history or []})
 
     return {
         "question": question,

@@ -36,6 +36,23 @@
   </div>
 </header>
 
+<!-- Thanh bên: danh sách phiên trò chuyện.
+     Đặt NGOÀI .scroller để nó không cuộn theo hội thoại — người dùng cần thấy danh sách
+     phiên kể cả khi đang đọc giữa một cuộc trò chuyện dài. -->
+<aside class="sidebar" id="sidebar">
+  <div class="sb-head">
+    <button class="sb-new" id="sbNew" type="button">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      Cuộc trò chuyện mới
+    </button>
+  </div>
+  <div class="sb-list" id="sbList"></div>
+  <p class="sb-foot">Lịch sử lưu trên máy này.</p>
+</aside>
+<button class="sb-toggle" id="sbToggle" type="button" title="Ẩn/hiện danh sách">
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+</button>
+
 <div class="scroller" id="scroller">
   <div class="thread" id="thread">
 
@@ -95,7 +112,7 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M3.5 11.5 21 3l-8.5 18-2.2-7.3z"/></svg>
     </button>
   </form>
-  <p class="hint">Trợ lý chạy trên máy local nên mỗi câu mất khoảng 20–60 giây. Số liệu lấy trực tiếp từ hồ sơ SEC.</p>
+  <p class="hint">Trợ lý chạy trên máy local nên mỗi câu mất khoảng 20–60 giây. Số liệu lấy trực tiếp từ hồ sơ SEC (Mỹ) và VCI (Việt Nam).</p>
 </div>
 
 <script src="/static/chat.js"></script>

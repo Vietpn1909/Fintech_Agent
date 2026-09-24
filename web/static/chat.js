@@ -210,6 +210,9 @@ function addTrace(body, steps, secs, rounds) {
 
 async function submit(question) {
   if (busy) return;
+  // Chưa có phiên nào thì tạo ngay, TRƯỚC khi gửi câu hỏi — nếu tạo sau thì câu đầu tiên
+  // không có chỗ để lưu và người dùng mất đúng câu mở đầu cuộc trò chuyện.
+  if (!currentSession) await newSession();
   busy = true;
   $('#sendBtn').disabled = true;
   $('#welcome')?.remove();
@@ -251,7 +254,7 @@ async function submit(question) {
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, session_id: currentSession }),
     });
     if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
 
@@ -315,6 +318,8 @@ async function submit(question) {
       'Kiểm tra máy chủ còn chạy không, và LM Studio đã bật server chưa (tab Developer → Start Server).');
   } finally {
     busy = false;
+    // Làm mới danh sách để tiêu đề phiên (lấy từ câu hỏi đầu tiên) hiện ra ngay.
+    loadSessions();
     $('#sendBtn').disabled = false;
     scrollDown();
   }
@@ -366,8 +371,137 @@ $('#composer').addEventListener('submit', (e) => {
   submit(q);
 });
 
-$('#newBtn').addEventListener('click', () => { if (!busy) location.reload(); });
+$('#newBtn').addEventListener('click', () => { if (!busy) startNew(); });
 
 renderSuggestions();
 loadHealth();
 setInterval(loadHealth, 30000);
+
+
+// ══════════════════════════════════════════════ phiên trò chuyện
+//
+// Lịch sử nằm ở máy chủ (SQLite) chứ không ở localStorage. Lý do: chính agent cần đọc
+// lại các lượt trước để hiểu "còn năm trước thì sao" đang hỏi về ai, mà agent chạy ở
+// máy chủ. Để lịch sử ở trình duyệt thì mỗi câu hỏi phải gửi kèm toàn bộ cuộc trò
+// chuyện, và đóng tab là mất sạch.
+
+let currentSession = null;
+let sessions = [];
+
+const SB = {
+  list: $('#sbList'),
+  toggle: $('#sbToggle'),
+  newBtn: $('#sbNew'),
+};
+
+function fmtWhen(ts) {
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+}
+
+function renderSessions() {
+  if (!SB.list) return;
+  if (!sessions.length) {
+    SB.list.innerHTML = '<p class="sb-empty">Chưa có cuộc trò chuyện nào. Hỏi một câu để bắt đầu.</p>';
+    return;
+  }
+  SB.list.innerHTML = sessions.map((x) => `
+    <div class="sb-item${x.id === currentSession ? ' on' : ''}" data-id="${esc(x.id)}">
+      <span class="sb-title" title="${esc(x.title || 'Cuộc trò chuyện mới')}">${esc(x.title || 'Cuộc trò chuyện mới')}</span>
+      <span class="sb-when" style="font-size:11px;color:var(--muted);flex:0 0 auto">${fmtWhen(x.updated_at)}</span>
+      <button class="sb-del" data-del="${esc(x.id)}" title="Xóa cuộc trò chuyện này" aria-label="Xóa">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+      </button>
+    </div>`).join('');
+}
+
+async function loadSessions() {
+  try {
+    const data = await (await fetch('/api/sessions')).json();
+    sessions = data.sessions || [];
+    renderSessions();
+  } catch { /* không có danh sách thì trang vẫn hỏi đáp được */ }
+}
+
+// ⚠️ KHÔNG TẠO PHIÊN KHI BẤM "MỚI".
+//
+// Bản đầu gọi luôn POST /api/sessions, và chỉ sau vài lần thử đã thấy danh sách đầy
+// những dòng "Cuộc trò chuyện mới" rỗng — bấm nhầm một cái là để lại rác vĩnh viễn.
+// Phiên chỉ nên ra đời khi có nội dung, nên nút này chỉ dọn màn hình và bỏ phiên hiện
+// tại; `submit()` mới là chỗ tạo phiên, ngay trước câu hỏi đầu tiên.
+function startNew() {
+  currentSession = null;
+  thread.innerHTML = '';
+  renderWelcome();
+  renderSessions();
+}
+
+async function newSession() {
+  const data = await (await fetch('/api/sessions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  })).json();
+  currentSession = data.id;
+  return data.id;
+}
+
+// Dựng lại màn hình chào. Trước đây nút "Mới" gọi location.reload() nên không cần hàm
+// này; giờ chuyển phiên không tải lại trang thì phải tự dựng.
+function renderWelcome() {
+  thread.innerHTML = `<div class="welcome" id="welcome">
+      <h1>Hôm nay bạn muốn tìm hiểu doanh nghiệp nào?</h1>
+      <p>Hỏi về số liệu tài chính, nội dung báo cáo thường niên, hoặc quan hệ giữa các doanh nghiệp.</p>
+      <div class="suggest" id="suggest"></div>
+    </div>`;
+  renderSuggestions();
+}
+
+async function openSession(id) {
+  if (busy) return;
+  const data = await (await fetch('/api/sessions/' + encodeURIComponent(id))).json();
+  currentSession = id;
+  thread.innerHTML = '';
+  if (!data.messages || !data.messages.length) {
+    renderWelcome();
+  } else {
+    for (const m of data.messages) {
+      if (m.role === 'user') {
+        addUser(m.content);
+      } else {
+        const body = addBot();
+        body.innerHTML = md(m.content);
+        // Lượt cũ không còn dấu vết các bước — bỏ khung "đang chạy" đi cho sạch.
+        body.parentElement?.querySelector('.working')?.remove();
+      }
+    }
+  }
+  renderSessions();
+  scrollDown(true);
+}
+
+async function deleteSession(id) {
+  await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+  if (id === currentSession) {
+    currentSession = null;
+    thread.innerHTML = '';
+    renderWelcome();
+  }
+  await loadSessions();
+}
+
+SB.list?.addEventListener('click', (e) => {
+  const del = e.target.closest('[data-del]');
+  if (del) { e.stopPropagation(); deleteSession(del.dataset.del); return; }
+  const item = e.target.closest('.sb-item');
+  if (item) openSession(item.dataset.id);
+});
+
+SB.newBtn?.addEventListener('click', () => { if (!busy) startNew(); });
+SB.toggle?.addEventListener('click', () => {
+  const narrow = window.matchMedia('(max-width:900px)').matches;
+  document.body.classList.toggle(narrow ? 'sb-on' : 'sb-off');
+});
+
+loadSessions();

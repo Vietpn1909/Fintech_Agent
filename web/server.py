@@ -41,6 +41,8 @@ sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
+from src.chat import store as chat_store
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -204,6 +206,13 @@ def collect_stats() -> Dict[str, Any]:
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
+    # Phiên trò chuyện. Bỏ trống thì câu hỏi đứng một mình, y như hành vi cũ — các
+    # script gọi thẳng /api/ask-sync không phải sửa gì.
+    session_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class SessionRequest(BaseModel):
+    title: str = Field(default="", max_length=120)
 
 
 @app.get("/api/health")
@@ -297,7 +306,7 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
 
-def run_agent_stream(question: str) -> Iterator[str]:
+def run_agent_stream(question: str, session_id: Optional[str] = None) -> Iterator[str]:
     """Chạy agent ở luồng riêng và đẩy mọi sự kiện xuống trình duyệt qua một hàng đợi.
 
     HAI LÝ DO PHẢI TÁCH LUỒNG
@@ -357,11 +366,18 @@ def run_agent_stream(question: str) -> Iterator[str]:
                             "Chạy `docker compose up -d` để bật Neo4j và Qdrant."))
                 return
 
+            # Lịch sử đọc TRƯỚC khi ghi câu hỏi này vào, nếu không agent sẽ thấy chính
+            # câu đang hỏi nằm trong phần "các lượt trước".
+            history = chat_store.history_for(session_id) if session_id else []
+            if session_id:
+                chat_store.add_message(session_id, "user", question)
+
             sent = 0
             final: Dict[str, Any] = {}
             for update in agent.stream(
                 {
                     "question": question, "round": 0, "observations": [], "trace": [],
+                    "history": history,
                     "on_token": lambda piece: events.put(("token", piece)),
                 },
                 stream_mode="updates",
@@ -392,6 +408,16 @@ def run_agent_stream(question: str) -> Iterator[str]:
         finally:
             # Cả ba việc dọn dẹp đều nằm ở đây, trong một luồng thường — nơi `finally`
             # chắc chắn chạy, khác hẳn generator.
+            # Chỉ ghi khi CÓ nội dung. Agent hỏng giữa chừng thì phiên giữ nguyên câu
+            # hỏi của người dùng và không có câu trả lời rỗng nào chen vào lịch sử —
+            # một câu trả lời rỗng sẽ theo vào ngữ cảnh của mọi lượt sau.
+            if session_id and (final.get("answer") or "").strip():
+                chat_store.add_message(
+                    session_id, "assistant", final["answer"],
+                    {"seconds": round(time.time() - started, 1),
+                     "rounds": final.get("round", 0),
+                     "number_check": final.get("number_check")},
+                )
             if acquired:
                 _llm_gate.release()
             if counted:
@@ -435,7 +461,7 @@ def run_agent_stream(question: str) -> Iterator[str]:
 @app.post("/api/ask")
 def ask(req: AskRequest) -> StreamingResponse:
     return StreamingResponse(
-        run_agent_stream(req.question.strip()),
+        run_agent_stream(req.question.strip(), req.session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -454,11 +480,55 @@ def ask_sync(req: AskRequest) -> Dict[str, Any]:
 
     with _llm_gate:
         try:
-            result = agent_ask(req.question.strip())
+            history = chat_store.history_for(req.session_id) if req.session_id else []
+            if req.session_id:
+                chat_store.add_message(req.session_id, "user", req.question.strip())
+            result = agent_ask(req.question.strip(), history=history)
+            if req.session_id and (result.get("answer") or "").strip():
+                chat_store.add_message(req.session_id, "assistant", result["answer"],
+                                       {"seconds": result.get("seconds")})
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(503, str(exc)[:300])
     result["trace"] = [_enrich(t) for t in result.get("trace", [])]
     return result
+
+
+# ------------------------------------------------------------------ phiên trò chuyện
+#
+# Lịch sử nằm ở SQLite riêng chứ không ở Neo4j/Qdrant — xem chú thích đầu
+# `src/chat/store.py`. Chưa có đăng nhập: ai mở được trang là thấy được mọi phiên.
+
+
+@app.get("/api/sessions")
+def list_sessions() -> Dict[str, Any]:
+    return {"sessions": chat_store.list_sessions()}
+
+
+@app.post("/api/sessions")
+def create_session(req: SessionRequest) -> Dict[str, Any]:
+    return chat_store.create_session(req.title)
+
+
+@app.get("/api/sessions/{session_id}")
+def read_session(session_id: str) -> Dict[str, Any]:
+    data = chat_store.get_session(session_id)
+    if not data:
+        raise HTTPException(404, "Không có phiên này")
+    return data
+
+
+@app.patch("/api/sessions/{session_id}")
+def rename_session(session_id: str, req: SessionRequest) -> Dict[str, Any]:
+    if not chat_store.rename_session(session_id, req.title):
+        raise HTTPException(404, "Không có phiên này")
+    return {"ok": True, "title": req.title}
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str) -> Dict[str, Any]:
+    if not chat_store.delete_session(session_id):
+        raise HTTPException(404, "Không có phiên này")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ trang tĩnh

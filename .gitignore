@@ -8,3 +8,4 @@ data/cache/
 .ipynb_checkpoints/
 eval_results/
 data/tessdata/
+data/chat.db
