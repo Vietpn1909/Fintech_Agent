@@ -56,9 +56,36 @@ VN30 = [
 ]
 
 
+def loaded_years() -> dict:
+    """Mã -> năm báo cáo ĐANG có trong kho. Đọc từ chính Qdrant, không từ sổ ghi chép."""
+    from qdrant_client import QdrantClient
+
+    from config.settings import settings as _s
+
+    client = QdrantClient(url=_s.qdrant_url)
+    try:
+        client.get_collection(VN_REPORT_COLLECTION)
+    except Exception:  # noqa: BLE001 — chưa có kho thì coi như chưa có gì
+        return {}
+    out, offset = {}, None
+    while True:
+        points, offset = client.scroll(collection_name=VN_REPORT_COLLECTION, limit=2000,
+                                       with_payload=["ticker", "fiscal_year"], offset=offset)
+        for p in points:
+            ticker = p.payload.get("ticker")
+            year = p.payload.get("fiscal_year")
+            if ticker and year:
+                out[ticker] = max(int(year), out.get(ticker, 0))
+        if offset is None:
+            break
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Nap bao cao thuong nien Viet Nam")
     ap.add_argument("--apply", action="store_true", help="ghi vao Qdrant (mac dinh chay thu)")
+    ap.add_argument("--reload", action="store_true",
+                    help="nap lai ke ca khi kho da co ban bang hoac moi hon")
     ap.add_argument("--no-browser", action="store_true",
                     help="bo qua nguon can trinh duyet (Playwright) cho nhanh")
     ap.add_argument("--limit", type=int, default=None, help="chi xu ly N ma dau tien")
@@ -98,6 +125,19 @@ def main() -> None:
 
     console.print(f"[cyan]Xử lý {len(symbols)} mã[/] · thử các năm {years} · "
                   f"file tải về: [dim]{RAW_DIR}[/]")
+
+    # ⚠️ KHÔNG BAO GIỜ THAY BẢN MỚI BẰNG BẢN CŨ HƠN.
+    #
+    # Lượt cập nhật định kỳ chạy bước này với `--no-browser` (Playwright quá nặng để chạy
+    # tự động không người trông). Nhưng ACB, SHB, SSB, TPB có bản 2025 CHỈ lấy được qua
+    # trình duyệt; bỏ trình duyệt thì ứng viên tốt nhất tụt về bản VietStock của 2021,
+    # 2020, 2019. Nếu cứ thế ghi đè, mỗi đêm chạy tự động sẽ làm dữ liệu CŨ ĐI một cách
+    # hoàn toàn im lặng — script vẫn báo "nạp thành công", số đoạn vẫn khớp.
+    #
+    # Đây là loại hỏng tệ nhất có thể có ở một cơ chế cập nhật: nó chạy đúng như thiết kế
+    # và phá dữ liệu.
+    existing = loaded_years()
+    kept, downgraded = [], []
 
     loaded, rejected, all_chunks, renamed = [], [], [], []
     started = time.time()
@@ -159,6 +199,11 @@ def main() -> None:
                 # cáo: TPBank đặt tên "BCTN 2026 TV.pdf" cho báo cáo mà bìa ghi rõ "BÁO
                 # CÁO THƯỜNG NIÊN 2025". Sai một năm là mọi trích dẫn từ file này chỉ
                 # người đọc sang đúng một tài liệu khác.
+                have = existing.get(info["ticker"], 0)
+                if have and found["year"] <= have and not args.reload:
+                    kept.append((symbol, have, found["year"]))
+                    continue
+
                 inside = year_in_text(pages)
                 if inside and inside != found["year"]:
                     renamed.append((symbol, found["year"], inside))
@@ -198,6 +243,17 @@ def main() -> None:
             f"[bold]{len(loaded)}/{len(symbols)} mã[/] · {len(all_chunks):,} đoạn · "
             f"độ dài đoạn trung vị {int(statistics.median(lens))} ký tự"
         )
+
+    if kept:
+        console.print(f"\n[cyan]Giữ nguyên bản đang có[/] ({len(kept)} mã — ứng viên không mới hơn):")
+        for symbol, have, cand in kept[:10]:
+            same = "cùng năm" if cand == have else f"cũ hơn ({cand})"
+            console.print(f"   {symbol:<5} giữ {have} · ứng viên {same}")
+        if len(kept) > 10:
+            console.print(f"   [dim]… và {len(kept) - 10} mã nữa[/]")
+        console.print("[dim]Bỏ qua bản cùng năm giúp lượt cập nhật định kỳ gần như miễn "
+                      "phí: chỉ báo cáo THẬT SỰ mới mới phải nhúng lại. Dùng --reload để "
+                      "ép nạp lại tất cả.[/]")
 
     if renamed:
         console.print("\n[cyan]Sửa năm theo nội dung tài liệu[/] (tên file mang năm công bố):")

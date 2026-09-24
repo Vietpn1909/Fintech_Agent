@@ -225,6 +225,12 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/14_load_vietnam_profiles.py --resume --apply     # mô tả DN · ~11 phút
 .venv/Scripts/python.exe scripts/15_load_vietnam_annual_reports.py --apply   # báo cáo thường niên · ~12 phút
 
+# --- Vận hành ---
+.venv/Scripts/python.exe scripts/18_refresh.py             # chay thu, xem cai gi da cu
+.venv/Scripts/python.exe scripts/18_refresh.py --apply     # cap nhat that
+.venv/Scripts/python.exe scripts/17_show_logs.py --tail 10 # 10 luot gan nhat
+.venv/Scripts/python.exe scripts/17_show_logs.py --tools   # thong ke trang thai cong cu
+
 # --- Đánh giá ---
 .venv/Scripts/python.exe scripts/07_build_testset.py                 # sinh 34 câu hỏi
 .venv/Scripts/python.exe scripts/08_run_eval.py --numeric-only       # chấm xác định (Mỹ)
@@ -812,6 +818,77 @@ Không lần nào là lãng phí — mỗi lần lộ ra lỗi thật mà đọc
 
 Điểm chung của cả năm: **không lỗi nào ném ra ngoại lệ**. Hệ thống vẫn chạy, vẫn trả lời,
 chỉ là trả lời sai — hoặc trả lời "không tìm thấy" về dữ liệu nằm ngay trong index.
+
+## Vận hành: nhật ký và cập nhật định kỳ
+
+### Nhật ký
+
+Trước đây `grep -rn "import logging" src/ web/` trả về **rỗng**. Mỗi câu trả lời có kèm
+dấu vết các bước agent đã đi, nhưng nó chỉ sống trong một lần gọi rồi biến mất — nên khi
+có người dùng thật báo một câu trả lời sai, không còn gì để lần lại.
+
+Điều đó quan trọng vì phần lớn lỗi nặng của dự án này đều **im lặng**: hỏi "Sabeco" ra
+một công ty UPCOM, hỏi cổ đông "SAB" ra một công ty Mỹ, "FPT Corp" báo không tìm thấy.
+Không cái nào ném ngoại lệ.
+
+Ghi ra JSON Lines (`logs/app.jsonl`), mỗi lượt một dòng, nối với nhau bằng **mã vết**:
+
+```
+scripts/17_show_logs.py --tail 10       10 lượt gần nhất
+scripts/17_show_logs.py --errors        chỉ lượt có số chưa truy được về nguồn
+scripts/17_show_logs.py --trace ab43c4   mọi dòng của một câu hỏi
+scripts/17_show_logs.py --tools --since 7d   thống kê trạng thái công cụ
+```
+
+`--tools` là mục đáng xem nhất. `ambiguous` / `company_not_found` / `no_data` không phải
+ngoại lệ, từng lần riêng lẻ trông hoàn toàn bình thường — nhưng đếm chúng theo thời gian
+là cách sớm nhất phát hiện một nhánh dữ liệu đang hỏng.
+
+Không ghi: nội dung câu trả lời (đã có trong `data/chat.db`), khóa và mật khẩu, toàn văn
+tài liệu. Câu hỏi thì có ghi — không lần lại được câu hỏi thì không tái hiện được lỗi.
+Tắt bằng `LOG_QUESTIONS=false`.
+
+### Cập nhật định kỳ
+
+`scripts/18_refresh.py` là một lệnh duy nhất, tự biết cái gì đã cũ:
+
+| Bước | Nhịp | Vì sao nhịp đó |
+|---|---|---|
+| `sec_filings` | 1 ngày | hồ sơ nộp bất cứ lúc nào |
+| `vn_metrics` | 7 ngày | VCI cập nhật theo quý |
+| `vn_shareholders` | 30 ngày | thay đổi vài lần một năm |
+| `vn_reports` | 30 ngày | báo cáo thường niên công bố khoảng tháng Tư |
+| `vn_profiles` | 90 ngày | gần như không đổi |
+
+Nó **đo dữ liệu thật thay vì tin sổ ghi chép**: chụp số đếm từ Neo4j/Qdrant trước và sau
+mỗi bước rồi báo phần chênh lệch. Script chạy xong không có nghĩa dữ liệu vào được — nó
+có thể chạy ở chế độ thử, có thể hỏng giữa chừng. "Chạy 2 ngày trước nhưng số bản ghi
+không đổi" chính là tín hiệu cần nhìn.
+
+**Một lỗi thiết kế bắt được khi thử.** Lượt tự động chạy bước báo cáo thường niên với
+`--no-browser` (Playwright quá nặng để chạy không người trông). Nhưng ACB, SHB, SSB, TPB
+có bản 2025 **chỉ lấy được qua trình duyệt**; bỏ trình duyệt thì ứng viên tốt nhất tụt về
+bản VietStock của 2021, 2020, 2019. Nếu cứ thế ghi đè, **mỗi đêm chạy tự động sẽ làm dữ
+liệu cũ đi** — script vẫn báo "nạp thành công", số đoạn vẫn khớp. Đây là kiểu hỏng tệ
+nhất có thể có ở một cơ chế cập nhật: nó chạy đúng như thiết kế và phá dữ liệu.
+
+Nay bước nạp so năm đang có trong kho trước khi ghi, và bỏ qua mọi ứng viên **không mới
+hơn**. Tác dụng phụ tốt: lượt định kỳ gần như miễn phí, chỉ báo cáo thật sự mới mới phải
+nhúng lại. Đo thật: chạy `--only vn_reports --apply --force` mất 7,7 phút và kho giữ
+nguyên 50.214 đoạn, ACB/SHB/SSB/TPB vẫn ở 2025.
+
+**Kiểm chất lượng chạy mỗi lượt**, kể cả khi mọi bước đều bỏ qua — cập nhật đều đặn mà
+không kiểm thì chỉ là tích thêm rác đều đặn. Nó vừa tìm ra 3 bản ghi có năm tài chính vô
+lý: PRTH mang hai giá trị 43465 và 43830, đó là **số sê-ri ngày của Excel** (2018-12-31
+và 2019-12-31) lọt vào từ XBRL do doanh nghiệp khai sai. Chúng vô hình trước mọi phép
+đếm, nhưng `max(fiscal_year)` thì trả về 43830.
+
+Chạy định kỳ trên Windows:
+
+```
+schtasks /Create /TN "FinGraph refresh" /SC DAILY /ST 02:00 ^
+  /TR "\"D:\FinTech Agent\.venv\Scripts\python.exe\" \"D:\FinTech Agent\scripts\18_refresh.py\" --apply"
+```
 
 ## Đánh giá: hai thước đo, không phải một
 
