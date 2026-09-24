@@ -65,6 +65,17 @@ _TOKEN = re.compile(r"\d[\d.,]*\d|\d")
 # nào đáng kể. Mọi lỗi thật đo được đều ở bậc tỷ.
 MIN_MAGNITUDE = 1e6
 
+# ⚠️ TRỪ KHI CON SỐ CÓ ĐƠN VỊ TIỀN ĐI NGAY SAU.
+#
+# Ngưỡng một triệu ở trên đúng với số trần, nhưng nó để lọt cả một loại số quan trọng:
+# "tạm ứng cổ tức 2.500 đồng mỗi cổ phiếu", "giá mục tiêu 85.000 đồng". Đây đúng là
+# những con số người đọc sẽ dùng để ra quyết định, mà lại nhỏ hơn ngưỡng.
+#
+# Đơn vị tiền đứng ngay sau là dấu hiệu đủ chắc để phân biệt chúng với năm (2024), số
+# trang, hay số lượng doanh nghiệp — những thứ mà xét vào chỉ sinh báo động giả.
+MIN_MAGNITUDE_WITH_UNIT = 100
+_MONEY_AFTER = re.compile(r"^\s*(đồng|đ\b|vnd|usd|dollar|cent|nghìn đồng|ngàn đồng)", re.I)
+
 # Cùng dung sai với bộ đánh giá, để hai bên nói cùng một ngôn ngữ.
 TOLERANCE = 0.01
 
@@ -163,6 +174,39 @@ def _is_negative(text: str, start: int, end: int) -> bool:
     return bool(neg) and max(neg) > (max(pos) if pos else -1)
 
 
+# --- Phần trăm: kiểm riêng, vì luật khác hẳn -------------------------------------------
+#
+# ⚠️ VÌ SAO KHÔNG ĐƯỢC CHO PHÉP "SUY RA TỪ DỮ LIỆU NGUỒN".
+#
+# Ý đầu tiên là: chấp nhận một phần trăm nếu nó bằng a/b hoặc (a-b)/b với a, b nào đó
+# trong dữ liệu nguồn. Đo thử trên một lần gọi công cụ thật (185 giá trị nguồn, dung sai
+# 0,5 điểm phần trăm): 100% các phần trăm SINH NGẪU NHIÊN đều "suy ra được". Với chừng
+# ấy con số thì mọi tỷ lệ đều trúng một cặp nào đó — phép kiểm hóa ra không kiểm gì cả.
+#
+# Nên phạm vi suy luận bị thu hẹp về ĐÚNG CÂU chứa phần trăm đó, tức là những con số mà
+# chính câu trả lời đã bày ra để người đọc tự nhẩm lại. Đo lại mức lọt lưới theo số lượng
+# số trong câu: 2 số -> 1,8% · 3 số -> 4,6% · 4 số -> 8,7% · 6 số -> 20%. Vì vậy chỉ lấy
+# tối đa 4 con số gần phần trăm nhất.
+PERCENT_TOLERANCE = 0.5      # điểm phần trăm; LLM hay làm tròn 16,23% thành 16%
+_PERCENT_POOL = 4            # số lượng con số tối đa được dùng để suy ra một phần trăm
+_PERCENT_AFTER = re.compile(r"^\s*(%|phần trăm|percent|pct\b)", re.I)
+
+
+def _sentence_bounds(text: str, pos: int) -> Tuple[int, int]:
+    """Khoảng của câu chứa vị trí `pos` — dùng để giới hạn phạm vi suy luận."""
+    start = 0
+    for mark in _SENTENCE_BREAKS:
+        idx = text.rfind(mark, 0, pos)
+        if idx != -1:
+            start = max(start, idx + len(mark))
+    end = len(text)
+    for mark in _SENTENCE_BREAKS:
+        idx = text.find(mark, pos)
+        if idx != -1:
+            end = min(end, idx)
+    return start, end
+
+
 def source_values(obj: Any, acc: Optional[List[Signed]] = None) -> List[Signed]:
     """Mọi con số xuất hiện trong dữ liệu công cụ trả về, kèm dấu nếu biết chắc.
 
@@ -214,7 +258,8 @@ def check_answer(answer: str, observations: Any, question: str = "") -> Dict[str
     # hai chỗ, một chỗ nói lãi một chỗ nói lỗ.
     occurrences: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for value, token, start, end in _scan(answer):
-        if abs(value) < MIN_MAGNITUDE:
+        has_unit = bool(_MONEY_AFTER.match(answer[end: end + 14]))
+        if abs(value) < (MIN_MAGNITUDE_WITH_UNIT if has_unit else MIN_MAGNITUDE):
             continue
         occ = occurrences.setdefault(
             (token, start), {"start": start, "end": end, "readings": set(), "signs": None}
@@ -223,6 +268,44 @@ def check_answer(answer: str, observations: Any, question: str = "") -> Dict[str
         signs = signs_of(abs(value))
         if signs is not None:
             occ["signs"] = (occ["signs"] or set()) | signs
+
+    # --- Phần trăm ---
+    #
+    # Một phần trăm được coi là có căn cứ nếu: (a) nó CÓ trong dữ liệu nguồn, hoặc (b) nó
+    # suy ra được từ những con số nằm ngay trong cùng câu — tức là câu trả lời đã bày sẵn
+    # phép tính cho người đọc kiểm lại. Ngoài hai trường hợp đó thì nó là con số do mô
+    # hình tự nghĩ ra, đúng thứ mà cả hệ thống này được dựng lên để chặn.
+    percent_problems: Dict[str, Dict[str, Any]] = {}
+    checked_percent = 0
+    for match in _TOKEN.finditer(answer):
+        if not _PERCENT_AFTER.match(answer[match.end(): match.end() + 12]):
+            continue
+        readings = {v for v in _readings(match.group()) if 0 < v <= 1000}
+        if not readings:
+            continue
+        checked_percent += 1
+        if any(signs_of(v) is not None for v in readings):
+            continue
+
+        low, high = _sentence_bounds(answer, match.start())
+        pool = sorted(
+            (abs(v) for v, _t, st, _e in _scan(answer)
+             if low <= st < high and st != match.start() and abs(v) >= MIN_MAGNITUDE
+             and signs_of(abs(v)) is not None),
+            key=lambda v: 0,
+        )[:_PERCENT_POOL]
+        derived = any(
+            b and (abs(100 * a / b - pct) <= PERCENT_TOLERANCE
+                   or abs(100 * (a - b) / b - pct) <= PERCENT_TOLERANCE)
+            for pct in readings
+            for a in pool for b in pool if a != b
+        )
+        if derived:
+            continue
+        token = match.group() + "%"
+        percent_problems.setdefault(
+            token, {"text": token, "readings": set(), "reason": "percent_not_in_source"}
+        )["readings"] |= readings
 
     problems: Dict[str, Dict[str, Any]] = {}
     for (token, _start), occ in occurrences.items():
@@ -238,9 +321,10 @@ def check_answer(answer: str, observations: Any, question: str = "") -> Dict[str
         problems.setdefault(token, {"text": token, "readings": set(), "reason": reason})
         problems[token]["readings"] |= occ["readings"]
 
+    problems.update(percent_problems)
     return {
         "ok": not problems,
-        "checked": len({token for token, _start in occurrences}),
+        "checked": len({token for token, _start in occurrences}) + checked_percent,
         "unverified": [
             {**item, "readings": sorted(item["readings"])} for item in problems.values()
         ],

@@ -25,6 +25,33 @@ from src.agent.verify import check_answer
 
 MUST_FLAG = [
     (
+        # Lỗ hổng cũ: bộ đối chiếu chỉ xét số từ một triệu trở lên, nên mọi tỷ lệ phần
+        # trăm đều lọt. Đây là loại số người đọc tin nhất mà lại không được kiểm gì cả.
+        "phần trăm KHÔNG có trong nguồn và không suy ra được từ câu",
+        "Ngân hàng đặt mục tiêu tăng trưởng tín dụng 45% trong năm 2026.",
+        [{"credit_growth_pct": 16.0}],
+        "",
+        "45%",
+    ),
+    (
+        # Suy luận chỉ được phép dùng số TRONG CÙNG CÂU. Cho phép suy từ toàn bộ dữ liệu
+        # nguồn thì đo được: 100% phần trăm sinh ngẫu nhiên đều "suy ra được" — vô dụng.
+        "phần trăm suy từ số ở CÂU KHÁC thì không tính là có căn cứ",
+        "Doanh thu năm nay 100.000.000.000 đồng. Năm trước 86.000.000.000 đồng. "
+        "Mức tăng là 16,3%.",
+        [{"now": 100000000000.0, "prev": 86000000000.0}],
+        "",
+        "16,3%",
+    ),
+    (
+        # Số nhỏ có đơn vị tiền: cổ tức, giá mục tiêu — dưới ngưỡng cũ nên từng lọt hết.
+        "cổ tức mỗi cổ phiếu sai so với nguồn",
+        "Tạm ứng cổ tức đợt 1 với mức 3.500 đồng mỗi cổ phiếu.",
+        [{"dividend_per_share": 2500}],
+        "",
+        "3.500",
+    ),
+    (
         "chép sai số dù nguồn nằm ngay trong ngữ cảnh",
         "Lợi nhuận gộp của Apple FY2024 là 119.100.000.000 USD.",
         [{"gross_profit": 180683000000.0}],
@@ -95,9 +122,27 @@ MUST_PASS = [
         "",
     ),
     (
-        "năm, phần trăm, số lượng — dưới ngưỡng, không xét",
-        "Năm 2024 có 16 doanh nghiệp, tăng 12,5% so với 2023.",
+        "năm và số lượng — dưới ngưỡng, không xét",
+        "Năm 2024 có 16 doanh nghiệp, trang 132 nêu 5 nhóm rủi ro.",
         [{"revenue": 642637000000.0}],
+        "",
+    ),
+    (
+        "phần trăm CÓ trong dữ liệu nguồn",
+        "Biên lợi nhuận gộp đạt 73,4% trong năm tài chính 2024.",
+        [{"gross_margin_pct": 73.4}],
+        "",
+    ),
+    (
+        "phần trăm SUY RA ĐƯỢC từ hai con số nêu ngay trong câu",
+        "Doanh thu tăng từ 86.000.000.000 lên 100.000.000.000 đồng, tức 16,3%.",
+        [{"prev": 86000000000.0, "now": 100000000000.0}],
+        "",
+    ),
+    (
+        "cổ tức đúng — số nhỏ nhưng có đơn vị tiền, vẫn phải qua",
+        "Tạm ứng cổ tức đợt 1 với mức 2.500 đồng mỗi cổ phiếu.",
+        [{"dividend_per_share": 2500}],
         "",
     ),
     (

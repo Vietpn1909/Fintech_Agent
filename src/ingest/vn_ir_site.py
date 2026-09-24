@@ -97,7 +97,7 @@ _YEAR = re.compile(r"20(1[5-9]|2[0-9])")
 # Bắt cả hai chiều vì doanh nghiệp viết cả hai kiểu: "AR2025" và "2025AR".
 _YEAR_NEAR = re.compile(
     r"(?:ar|bctn|thuong[-_ ]?nien|nam)[-_ ]?(20(?:1[5-9]|2[0-9]))"
-    r"|(20(?:1[5-9]|2[0-9]))[-_ ]?(?:ar|bctn)",
+    r"|(20(?:1[5-9]|2[0-9]))[-_ ]?(?:ar\b|bctn)",
     re.I,
 )
 
