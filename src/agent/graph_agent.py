@@ -46,6 +46,7 @@ from langgraph.graph import END, START, StateGraph
 from config.settings import settings
 from src.agent import tools
 from src.agent.verify import check_answer, retry_instruction, warning_block
+from src.obs import logs
 from src.ingest.xbrl import METRIC_LABELS
 from src.llm.client import chat, chat_json, chat_stream
 
@@ -277,6 +278,10 @@ class AgentState(TypedDict, total=False):
     # Các lượt trước trong cùng phiên: [{"role": "user"|"assistant", "content": ...}].
     # Rỗng thì agent chạy y hệt bản một-lượt cũ.
     history: List[Dict[str, str]]
+    # Mã nối mọi dòng nhật ký của CÙNG một câu hỏi. Phải khai ở đây: AgentState là
+    # TypedDict nên khóa không khai báo sẽ bị LangGraph bỏ im lặng, và mọi dòng log của
+    # các khối bên trong sẽ mất trace_id mà không có dấu hiệu gì.
+    trace_id: str
 
 
 def _truncate(obj: Any, limit: int = 3500) -> str:
@@ -434,13 +439,22 @@ def node_execute(state: AgentState) -> AgentState:
             result = {"status": "error", "error": str(exc)[:200]}
 
         observations.append({"tool": name, "args": args, "result": result})
+        status = result.get("status") if isinstance(result, dict) else "ok"
+        elapsed = time.time() - started
         trace.append({
             "step": "thực thi",
             "tool": name,
             "args": args,
-            "seconds": round(time.time() - started, 1),
-            "status": result.get("status") if isinstance(result, dict) else "ok",
+            "seconds": round(elapsed, 1),
+            "status": status,
         })
+        # Ghi ra nhật ký ngay tại đây, không đợi tới cuối lượt. Agent có thể chạy nhiều
+        # vòng và vòng sau có thể không bao giờ tới (lỗi, hết thời gian, người dùng đóng
+        # tab) — mà chính những lần gọi công cụ trả về `ambiguous` hay `not_found` mới là
+        # dấu vết đáng giá nhất khi đi tìm lỗi im lặng.
+        logs.log_tool(name, args, str(status), elapsed,
+                      trace_id=state.get("trace_id"),
+                      extra={"round": current_round})
 
     return {**state, "observations": observations, "trace": trace, "round": current_round}
 
@@ -704,7 +718,8 @@ _agent = None
 
 
 def ask(question: str, verbose: bool = False,
-        history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        history: Optional[List[Dict[str, str]]] = None,
+        session_id: Optional[str] = None, source: str = "ask") -> Dict[str, Any]:
     """Điểm vào chính: đặt câu hỏi, nhận câu trả lời kèm dấu vết suy luận.
 
     `history` là các lượt trước trong cùng phiên, dạng [{"role", "content"}]. Bỏ trống
@@ -716,10 +731,11 @@ def ask(question: str, verbose: bool = False,
         _agent = build_agent()
 
     started = time.time()
+    trace_id = logs.new_trace_id()
     final = _agent.invoke({"question": question, "round": 0, "observations": [],
-                           "trace": [], "history": history or []})
+                           "trace": [], "history": history or [], "trace_id": trace_id})
 
-    return {
+    result = {
         "question": question,
         "answer": final.get("answer", ""),
         "trace": final.get("trace", []),
@@ -729,4 +745,13 @@ def ask(question: str, verbose: bool = False,
         # Kết quả đối chiếu số. Đưa ra ngoài để bộ đánh giá và giao diện đều thấy được
         # câu trả lời nào có con số không truy được về nguồn.
         "number_check": final.get("number_check"),
+        # Mã để nối câu trả lời này với các dòng log của nó. Không có nó thì khi người
+        # dùng báo "câu trả lời này sai", không có cách nào tìm đúng dòng log tương ứng.
+        "trace_id": trace_id,
     }
+    # ⚠️ MỘT LƯỢT, MỘT DÒNG. Bản đầu để `ask()` ghi log rồi endpoint web ghi thêm lần
+    # nữa, nên cùng một câu hỏi xuất hiện hai dòng cùng trace_id, một dòng thiếu
+    # session_id. Đếm số câu hỏi từ nhật ký sẽ ra gấp đôi, và đó là kiểu sai khó phát
+    # hiện vì bản thân từng dòng đều đúng.
+    logs.log_turn(question, result, trace_id, session_id=session_id, source=source)
+    return result

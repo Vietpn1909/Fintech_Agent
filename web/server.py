@@ -43,6 +43,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.chat import store as chat_store
+from src.obs import logs
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -368,6 +369,7 @@ def run_agent_stream(question: str, session_id: Optional[str] = None) -> Iterato
 
             # Lịch sử đọc TRƯỚC khi ghi câu hỏi này vào, nếu không agent sẽ thấy chính
             # câu đang hỏi nằm trong phần "các lượt trước".
+            trace_id = logs.new_trace_id()
             history = chat_store.history_for(session_id) if session_id else []
             if session_id:
                 chat_store.add_message(session_id, "user", question)
@@ -378,6 +380,7 @@ def run_agent_stream(question: str, session_id: Optional[str] = None) -> Iterato
                 {
                     "question": question, "round": 0, "observations": [], "trace": [],
                     "history": history,
+                    "trace_id": trace_id,
                     "on_token": lambda piece: events.put(("token", piece)),
                 },
                 stream_mode="updates",
@@ -404,6 +407,7 @@ def run_agent_stream(question: str, session_id: Optional[str] = None) -> Iterato
             events.put(("done", round(time.time() - started, 1), final.get("round", 0)))
 
         except Exception as exc:  # noqa: BLE001
+            logs.get("web").exception("web.stream_failed", extra={"trace_id": trace_id})
             events.put(("error", exc))
         finally:
             # Cả ba việc dọn dẹp đều nằm ở đây, trong một luồng thường — nơi `finally`
@@ -411,6 +415,13 @@ def run_agent_stream(question: str, session_id: Optional[str] = None) -> Iterato
             # Chỉ ghi khi CÓ nội dung. Agent hỏng giữa chừng thì phiên giữ nguyên câu
             # hỏi của người dùng và không có câu trả lời rỗng nào chen vào lịch sử —
             # một câu trả lời rỗng sẽ theo vào ngữ cảnh của mọi lượt sau.
+            logs.log_turn(
+                question,
+                {**final, "seconds": round(time.time() - started, 1),
+                 "rounds": final.get("round", 0),
+                 "number_check": final.get("number_check")},
+                trace_id, session_id=session_id, source="web",
+            )
             if session_id and (final.get("answer") or "").strip():
                 chat_store.add_message(
                     session_id, "assistant", final["answer"],
@@ -483,7 +494,8 @@ def ask_sync(req: AskRequest) -> Dict[str, Any]:
             history = chat_store.history_for(req.session_id) if req.session_id else []
             if req.session_id:
                 chat_store.add_message(req.session_id, "user", req.question.strip())
-            result = agent_ask(req.question.strip(), history=history)
+            result = agent_ask(req.question.strip(), history=history,
+                               session_id=req.session_id, source="api")
             if req.session_id and (result.get("answer") or "").strip():
                 chat_store.add_message(req.session_id, "assistant", result["answer"],
                                        {"seconds": result.get("seconds")})
