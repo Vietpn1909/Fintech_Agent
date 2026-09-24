@@ -20,6 +20,7 @@ dữ liệu không) chứ không so khớp nguyên văn.
 Chạy:  .venv/Scripts/python.exe tests/test_guardrails.py
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -207,10 +208,71 @@ def check_grading(failures: list) -> int:
     return len(REFUSAL_GRADING) + len(CURRENCY_GRADING)
 
 
+# --- Nhóm 5: hạ tầng chết KHÁC HẲN không có dữ liệu ------------------------------------
+#
+# ⚠️ Đo thật trước khi sửa: trỏ cấu hình sang cổng không tồn tại rồi hỏi "Doanh thu thuần
+# của FPT năm 2025 là bao nhiêu?". Agent trả lời:
+#
+#     "Hệ thống không có dữ liệu về doanh thu thuần của FPT cho năm 2025."
+#
+# Câu đó SAI. Dữ liệu có, chỉ là cơ sở dữ liệu tạm thời không với tới được. Người đọc tin
+# là hệ thống thiếu dữ liệu rồi không hỏi lại nữa — một sự cố hạ tầng năm phút biến thành
+# một kết luận sai vĩnh viễn.
+#
+# Nguyên nhân: `vn_companies()` bắt MỌI ngoại lệ rồi trả bảng rỗng, và còn NHỚ bảng rỗng
+# đó ở cấp tiến trình — nên cơ sở dữ liệu sống lại cũng không cứu được, phải khởi động
+# lại tiến trình.
+#
+# Ca này chạy trong tiến trình con vì nó phải đổi biến môi trường TRƯỚC khi nạp cấu hình.
+
+
+def check_backend_down(failures: list) -> int:
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    print()
+    print("=" * 78)
+    print("NHÓM 5 — cơ sở dữ liệu chết: phải nói SỰ CỐ, không được nói 'không có dữ liệu'")
+    print("=" * 78)
+
+    root = Path(__file__).resolve().parent.parent
+    code = (
+        "import os, sys, json\n"
+        "os.environ['NEO4J_URI'] = 'bolt://localhost:9999'\n"
+        "os.environ['QDRANT_URL'] = 'http://localhost:9999'\n"
+        f"sys.path.insert(0, r'{root}')\n"
+        "from src.agent.tools import lookup_financials\n"
+        "print(json.dumps(lookup_financials('FPT'), ensure_ascii=False, default=str))\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=300)
+    line = [l for l in (proc.stdout or "").splitlines() if l.startswith("{")]
+    result = json.loads(line[-1]) if line else {}
+
+    checks = [
+        ("trạng thái là backend_unavailable",
+         result.get("status") == "backend_unavailable"),
+        ("KHÔNG phải not_found", result.get("status") != "not_found"),
+        ("có chỉ dẫn cấm nói 'không có dữ liệu'",
+         "không có dữ liệu" in (result.get("hint") or "")),
+        # Phải có tín hiệu "đừng gọi lại", nếu không agent sẽ thử lại đúng công cụ đó
+        # thêm hai vòng nữa — đo thật trước khi thêm câu này vào chỉ dẫn.
+        ("chỉ dẫn nói rõ gọi lại cũng hỏng y như vậy",
+         "Gọi lại" in (result.get("hint") or "")),
+    ]
+    for why, ok in checks:
+        print(f"  {'đúng' if ok else 'SAI '}  {why}")
+        if not ok:
+            failures.append(f"Hạ tầng chết: {why} — nhận được status={result.get('status')!r}")
+    return len(checks)
+
+
 def main() -> int:
     failures: list = []
     total = (check_injection(failures) + check_staleness(failures)
-             + check_grading(failures) + check_advice(failures))
+             + check_grading(failures) + check_backend_down(failures)
+             + check_advice(failures))
 
     print()
     print("=" * 78)

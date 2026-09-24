@@ -28,7 +28,9 @@ from typing import Any, Dict, List, Optional
 
 from src.graph.schema import INFRA_RELATIONS, QUERYABLE_RELATIONS, STRUCTURED_RELATIONS
 from src.graph.store import GraphStore
-from src.ingest.on_demand import ensure_text_available, is_text_indexed, resolve_company
+from src.ingest.on_demand import (
+    BackendUnavailable, ensure_text_available, is_text_indexed, resolve_company,
+)
 from src.ingest.xbrl import METRIC_LABELS
 from src.vector.store import (
     VN_PROFILE_COLLECTION, VN_REPORT_COLLECTION, VN_REPORT_DIM, VN_REPORT_MODEL,
@@ -98,6 +100,19 @@ def vn_reports() -> VectorStore:
 # --------------------------------------------------------------------- tra cứu số liệu
 
 
+def _resolve(name: str, **kwargs: Any) -> Dict[str, Any]:
+    """Phân giải tên, và biến sự cố hạ tầng thành một TRẠNG THÁI RIÊNG.
+
+    Không có lớp này thì mọi công cụ đều báo `not_found` khi cơ sở dữ liệu chết, và agent
+    nói với người dùng rằng hệ thống không có dữ liệu — xem chú thích ở
+    `BackendUnavailable`.
+    """
+    try:
+        return resolve_company(name, **kwargs)
+    except BackendUnavailable as exc:
+        return {"status": "backend_unavailable", "query": name, "error": str(exc)}
+
+
 def _resolution_failure(query, resolved: Dict[str, Any]) -> Dict[str, Any]:
     """Biến một lần phân giải KHÔNG thành công thành kết quả công cụ nói rõ vì sao.
 
@@ -109,6 +124,21 @@ def _resolution_failure(query, resolved: Dict[str, Any]) -> Dict[str, Any]:
 
     Gộp hai trường hợp này làm một là quay lại đúng lỗi đã sửa: im lặng chọn bừa.
     """
+    # Sự cố hạ tầng KHÔNG được trình bày như thiếu dữ liệu.
+    if resolved.get("status") == "backend_unavailable":
+        return {
+            "status": "backend_unavailable",
+            "query": query,
+            "error": resolved.get("error", ""),
+            # Phải nói rõ đây là kết luận DỨT ĐIỂM, y như `_NOT_IN_SEC_HINT`. Thiếu câu
+            # đó, agent tưởng mình gọi sai rồi gọi lại đúng công cụ ấy — đo thật: hai
+            # lần thử lại vô ích trước khi chịu trả lời.
+            "hint": ("Cơ sở dữ liệu tạm thời không truy cập được. Gọi lại công cụ này "
+                     "hay bất kỳ công cụ nào khác đều sẽ hỏng y như vậy — hãy trả lời "
+                     "NGAY. TUYỆT ĐỐI không nói với người dùng rằng hệ thống không có "
+                     "dữ liệu về doanh nghiệp này; hãy nói rõ đây là sự cố kỹ thuật "
+                     "tạm thời và đề nghị thử lại sau."),
+        }
     if resolved.get("status") == "ambiguous":
         return {
             "status": "ambiguous",
@@ -143,7 +173,7 @@ def lookup_financials(
     # Lỗi cũ: hỏi "Acer" -> trả về doanh thu của MACERICH (bất động sản) với status ok.
     # Nguyên nhân là lấy thẳng ứng viên đầu tiên mà không xét chất lượng khớp. Giờ khớp
     # yếu sẽ ra not_found kèm gợi ý, thay vì một con số đúng gắn nhầm doanh nghiệp.
-    resolved = resolve_company(company)
+    resolved = _resolve(company)
     if resolved["status"] != "ok":
         return _resolution_failure(company, resolved)
 
@@ -218,7 +248,12 @@ def compare_financials(
         # Khớp yếu bị coi như KHÔNG phân giải được. So sánh mà lẫn một doanh nghiệp sai
         # vào bảng còn tệ hơn là thiếu nó: agent sẽ xếp hạng và kết luận trên số của
         # công ty khác mà không ai phát hiện.
-        r = resolve_company(name)
+        r = _resolve(name)
+        # Hạ tầng chết thì dừng hẳn, đừng xếp cả danh sách vào "không phân giải được" —
+        # so sánh vài doanh nghiệp trong khi thiếu những doanh nghiệp còn lại là ra một
+        # bảng xếp hạng sai mà trông vẫn hoàn chỉnh.
+        if r["status"] == "backend_unavailable":
+            return _resolution_failure(name, r)
         if r["status"] == "ok":
             best = r["best"]
             resolved.append(best["ticker"])
@@ -444,7 +479,7 @@ def search_filings(
     if companies:
         tickers = []
         for name in companies:
-            r = resolve_company(name)
+            r = _resolve(name)
             if r["status"] == "ambiguous":
                 ambiguous.append({"name": name, "options": r.get("options", []),
                                   "hint": r.get("hint", "")})
@@ -644,7 +679,7 @@ def graph_entity_ambiguity(name: str) -> Optional[Dict[str, Any]]:
     thị là người và tổ chức, không phải doanh nghiệp niêm yết, và `resolve_company` trả
     về not_found cho chúng là chuyện bình thường.
     """
-    resolved = resolve_company(name)
+    resolved = _resolve(name)
     if resolved.get("status") != "ambiguous":
         return None
     return _resolution_failure(name, resolved)
@@ -689,7 +724,7 @@ def resolve_graph_entity(name: str, limit: int = 3) -> List[Dict]:
     # "Sabeco là mã nào". Khi nó trả lời chắc chắn thì câu trả lời đó thắng, và phép khớp
     # chuỗi chỉ còn là phương án dự phòng cho những thực thể KHÔNG phải doanh nghiệp niêm
     # yết — người, bộ ngành, quỹ — nơi không có mã nào để phân giải.
-    resolved = resolve_company(name, limit=2)
+    resolved = _resolve(name, limit=2)
     if resolved.get("status") == "ok":
         via_resolved = _by_ticker_or_name(resolved, limit)
         if via_resolved:
@@ -815,7 +850,7 @@ def company_coverage(company: str) -> Dict[str, Any]:
     Giờ mỗi tầng một con số riêng, cộng một bản tóm tắt bằng lời để agent nhắc lại cho
     người dùng mà không phải tự diễn giải.
     """
-    resolved = resolve_company(company)
+    resolved = _resolve(company)
     if resolved["status"] != "ok":
         return _resolution_failure(company, resolved)
 

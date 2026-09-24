@@ -250,6 +250,25 @@ def resolve_ticker(query: str, limit: int = 5) -> List[Dict[str, str]]:
     return out
 
 
+class BackendUnavailable(RuntimeError):
+    """Không nối được tới Neo4j/Qdrant — KHÁC HẲN với "không có dữ liệu".
+
+    ⚠️ Vì sao phải là một ngoại lệ riêng chứ không phải bảng rỗng.
+
+    Đo thật: trỏ cấu hình sang cổng không tồn tại rồi hỏi "Doanh thu thuần của FPT năm
+    2025 là bao nhiêu?". Agent trả lời:
+
+        "Hệ thống không có dữ liệu về doanh thu thuần của FPT cho năm 2025."
+
+    Câu đó SAI. Dữ liệu có, chỉ là cơ sở dữ liệu tạm thời không với tới được. Người dùng
+    đọc xong sẽ tin là hệ thống thiếu dữ liệu và không hỏi lại nữa — một sự cố hạ tầng
+    kéo dài năm phút biến thành một kết luận sai vĩnh viễn trong đầu người đọc.
+
+    Đây đúng là loại hỏng mà cả dự án này được dựng lên để chặn, chỉ khác là nó đến từ
+    tầng hạ tầng chứ không từ tầng dữ liệu.
+    """
+
+
 _vn_map: Optional[Dict[str, Dict[str, str]]] = None
 
 
@@ -283,8 +302,17 @@ def vn_companies() -> Dict[str, Dict[str, str]]:
                 }
                 for r in rows if r.get("symbol")
             }
-        except Exception:  # noqa: BLE001 — chưa nạp dữ liệu VN thì bỏ qua
-            _vn_map = {}
+        except Exception as exc:  # noqa: BLE001
+            # ⚠️ KHÔNG NHỚ KẾT QUẢ HỎNG. Bản trước gán `_vn_map = {}` ngay trong nhánh
+            # lỗi, mà biến đó là bộ nhớ đệm cấp tiến trình — nên MỘT lần mất kết nối
+            # thoáng qua khiến tiến trình vĩnh viễn tin rằng không có doanh nghiệp Việt
+            # Nam nào, cho tới khi khởi động lại. Cơ sở dữ liệu sống lại cũng không cứu.
+            #
+            # Truy vấn chạy được mà trả về rỗng thì mới là "chưa nạp dữ liệu VN" — và ca
+            # đó không đi qua đây, nó rơi vào nhánh thành công với bảng rỗng.
+            raise BackendUnavailable(
+                f"không truy vấn được đồ thị: {type(exc).__name__}: {str(exc)[:120]}"
+            ) from exc
     return _vn_map
 
 
