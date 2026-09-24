@@ -612,6 +612,44 @@ def search_filings(
 # --------------------------------------------------------------------- truy vấn đồ thị
 
 
+def _strong(rows: Optional[List[Dict]]) -> List[Dict]:
+    """Bỏ node khớp hạng `weak` — loại chỉ trùng chuỗi giữa chừng một từ khác.
+
+    "AMD" nằm trong "Amdocs": lấy node đó làm điểm xuất phát thì mọi đường đi tìm được
+    đều nói về sai doanh nghiệp, mà không có dấu hiệu nào báo lỗi.
+    """
+    return [r for r in (rows or []) if r.get("confidence") != "weak"]
+
+
+def graph_entity_ambiguity(name: str) -> Optional[Dict[str, Any]]:
+    """Trả về mô tả nhập nhằng nếu `name` gọi tên nhiều hơn một doanh nghiệp đã biết.
+
+    ⚠️ KHỚP CHUỖI TRONG ĐỒ THỊ KHÔNG BIẾT GÌ VỀ CHUYỆN TRÙNG MÃ.
+
+    `resolve_graph_entity` tra tên bằng cách khớp chuỗi trực tiếp trong đồ thị, và điều đó
+    đúng cho phần lớn trường hợp — node tên "Ministry Of Finance" hay "Daiwa Securities"
+    thì chẳng có mã chứng khoán nào để phân giải.
+
+    Nhưng nó mù trước nhóm mã trùng hai sàn. Đo thật: hỏi "Những cổ đông lớn của SAB là
+    ai?" thì phép khớp chuỗi trúng node "SAB Biotherapeutics, Inc." (một công ty công
+    nghệ sinh học Mỹ), công cụ trả về `no_relations`, và agent kết luận rất trôi chảy
+    rằng Sabeco không có cổ đông nào — trong khi dữ liệu sở hữu của SAB.VN nằm sẵn trong
+    đồ thị.
+
+    `lookup_financials` và `company_coverage` đều đã báo `ambiguous` cho đúng chuỗi đó.
+    Chỉ nhánh đồ thị là tự viết đường phân giải riêng rồi đánh rơi lớp chặn — lần thứ ba
+    cùng một kiểu lỗi trong dự án này, sau `search_filings` và `_resolve_vn`.
+
+    Chỉ chặn khi NHẬP NHẰNG, không chặn khi không tìm thấy: rất nhiều thực thể trong đồ
+    thị là người và tổ chức, không phải doanh nghiệp niêm yết, và `resolve_company` trả
+    về not_found cho chúng là chuyện bình thường.
+    """
+    resolved = resolve_company(name)
+    if resolved.get("status") != "ambiguous":
+        return None
+    return _resolution_failure(name, resolved)
+
+
 def resolve_graph_entity(name: str, limit: int = 3) -> List[Dict]:
     """Tìm node trong đồ thị từ tên người dùng (hoặc LLM) đưa vào.
 
@@ -639,8 +677,23 @@ def resolve_graph_entity(name: str, limit: int = 3) -> List[Dict]:
     # Chỉ nhận node khớp CHẮC CHẮN. Node hạng `weak` là loại chỉ trùng chuỗi giữa chừng
     # một từ khác ("AMD" nằm trong "Amdocs") — lấy nó làm điểm xuất phát thì mọi đường đi
     # tìm được đều nói về sai doanh nghiệp, mà không có dấu hiệu nào báo lỗi.
-    def _strong(rows):
-        return [r for r in (rows or []) if r.get("confidence") != "weak"]
+    # ⚠️ PHÂN GIẢI CÓ THẨM QUYỀN PHẢI ĐI TRƯỚC KHỚP CHUỖI.
+    #
+    # Bản trước khớp chuỗi trong đồ thị trước tiên, và lỗi Acer→Macerich quay lại ngay
+    # bằng cửa này: hỏi cổ đông của "Sabeco" thì phép khớp chuỗi trúng node "SABECO
+    # SONGTIEN Commerce Joint Stock Company" — một công ty UPCOM nhỏ có chữ SABECO trong
+    # tên — rồi trả về quan hệ sở hữu của nó. Không lỗi nào báo ra, chỉ là toàn bộ câu
+    # trả lời nói về một doanh nghiệp khác.
+    #
+    # `resolve_company` đã có ba tầng khớp và lớp chặn nhập nhằng để trả lời đúng câu
+    # "Sabeco là mã nào". Khi nó trả lời chắc chắn thì câu trả lời đó thắng, và phép khớp
+    # chuỗi chỉ còn là phương án dự phòng cho những thực thể KHÔNG phải doanh nghiệp niêm
+    # yết — người, bộ ngành, quỹ — nơi không có mã nào để phân giải.
+    resolved = resolve_company(name, limit=2)
+    if resolved.get("status") == "ok":
+        via_resolved = _by_ticker_or_name(resolved, limit)
+        if via_resolved:
+            return via_resolved
 
     alias = CANONICAL_COMPANIES.get((name or "").strip().lower())
     if alias:
@@ -652,12 +705,14 @@ def resolve_graph_entity(name: str, limit: int = 3) -> List[Dict]:
     if direct:
         return direct
 
-    # Nhánh dự phòng cũng phải qua bộ lọc độ tin cậy, nếu không lỗi "Acer -> Macerich"
-    # sẽ quay lại bằng cửa sau: phân giải sai mã rồi tra đồ thị bằng chính mã sai đó.
-    resolved = resolve_company(name, limit=2)
-    if resolved["status"] != "ok":
-        return []
+    return []
 
+
+def _by_ticker_or_name(resolved: Dict[str, Any], limit: int = 3) -> List[Dict]:
+    """Tìm node đồ thị của doanh nghiệp đã phân giải được: theo mã trước, rồi theo tên.
+
+    Vẫn lọc độ tin cậy ở nhánh tra theo tên — đây là cửa cuối, bỏ sót là lỗi quay lại.
+    """
     for candidate in [resolved["best"]] + resolved.get("alternatives", []):
         via_ticker = graph().run(
             """
@@ -696,6 +751,10 @@ def graph_neighbors(entity: str, relations: Optional[List[str]] = None, limit: i
         # thì agent xin lọc theo OWNED_BY sẽ bị bỏ lặng lẽ và trả về rỗng.
         relations = [r for r in relations if r in QUERYABLE_RELATIONS]
 
+    ambiguous = graph_entity_ambiguity(entity)
+    if ambiguous:
+        return ambiguous
+
     matches = resolve_graph_entity(entity)
     if not matches:
         return {"status": "entity_not_found", "entity": entity,
@@ -722,6 +781,11 @@ def graph_path(source: str, target: str, max_hops: int = 3) -> Dict[str, Any]:
     đoạn nào như vậy, nó bó tay. Đồ thị thì đi qua các mắt xích trung gian để dựng lại
     chuỗi liên kết, kèm bằng chứng cho từng mắt xích.
     """
+    for side in (source, target):
+        ambiguous = graph_entity_ambiguity(side)
+        if ambiguous:
+            return ambiguous
+
     src = resolve_graph_entity(source, limit=1)
     tgt = resolve_graph_entity(target, limit=1)
     if not src or not tgt:

@@ -28,7 +28,8 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from config.settings import PROCESSED_DIR, settings
-from src.eval.grader import grade_entities, grade_numeric
+from src.eval.grader import (grade_currency, grade_entities, grade_entity_any,
+                             grade_numeric, grade_refusal)
 from src.eval.testset import load_testset
 
 console = Console()
@@ -60,11 +61,22 @@ def collect_contexts(observations) -> list:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--numeric-only", action="store_true", help="bỏ qua RAGAS")
+    # Bộ câu hỏi Việt Nam sinh thẳng từ đồ thị mỗi lần chạy, không lưu ra tệp: dữ liệu
+    # VCI được nạp lại theo quý, nên một bộ đề đóng băng sẽ lặng lẽ lệch khỏi dữ liệu
+    # thật và bắt đầu chấm sai những câu trả lời đúng.
+    ap.add_argument("--vietnam", action="store_true",
+                    help="chay bo cau hoi Viet Nam (sinh tu do thi)")
+    ap.add_argument("--all", action="store_true", help="chay ca hai bo")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--tolerance", type=float, default=0.01, help="sai số cho phép khi dò số")
     args = ap.parse_args()
 
-    questions = load_testset()
+    if args.vietnam or args.all:
+        from src.eval.testset_vn import build_all as build_vn
+        vn = build_vn()
+        questions = (load_testset() + vn) if args.all else vn
+    else:
+        questions = load_testset()
     if args.limit:
         questions = questions[: args.limit]
 
@@ -116,7 +128,20 @@ def main() -> None:
                     "correct": g.correct, "expected_value": g.expected,
                     "matched_value": g.matched_value, "relative_error": g.relative_error,
                 })
-            if q.expected_entities:
+            elif q.grading == "refusal":
+                g = grade_refusal(answer, (q.meta or {}).get("must_refuse", []))
+                record.update({"correct": g["correct"], "refused": g["refused"],
+                               "fabricated_values": g["fabricated_values"]})
+            elif q.grading == "currency":
+                g = grade_currency(answer, (q.meta or {}).get("must_warn", []))
+                record.update({"correct": g["correct"], "warned_with": g["warned_with"]})
+
+            # `entity_forms` là các CÁCH GỌI của cùng một doanh nghiệp -> khớp một dạng
+            # là đủ. `expected_entities` là danh sách thực thể PHẢI CÓ ĐỦ (câu sàng lọc).
+            forms = (q.meta or {}).get("entity_forms")
+            if forms:
+                record["entity_recall"] = grade_entity_any(answer, forms)
+            elif q.expected_entities:
                 record["entity_recall"] = grade_entities(answer, q.expected_entities)
 
             records.append(record)
@@ -155,9 +180,25 @@ def main() -> None:
         wrong = [r for r in numeric if not r["correct"]]
         if wrong:
             console.print(f"\n[yellow]{len(wrong)} câu sai:[/]")
-            for r in wrong[:8]:
-                got = f"{r['matched_value']:,.0f}" if r["matched_value"] else "không có số"
-                console.print(f"   [dim]{r['qid']}[/] cần {r['expected_value']:,.0f} · nhận {got}")
+            for r in wrong[:10]:
+                # ⚠️ BA KIỂU CHẤM, BA KIỂU "SAI" KHÁC NHAU.
+                #
+                # Bản đầu giả định mọi bản ghi đều có `matched_value`, nên khi thêm hai
+                # nhóm vn_refusal và vn_currency thì khâu in kết quả vỡ bằng KeyError —
+                # sau khi đã chạy xong cả 43 câu. Mất trắng hai mươi phút chạy vì một
+                # dòng in ấn.
+                if "expected_value" in r:
+                    got = f"{r['matched_value']:,.0f}" if r.get("matched_value") else "không có số"
+                    console.print(f"   [dim]{r['qid']}[/] cần {r['expected_value']:,.0f} · nhận {got}")
+                elif "refused" in r:
+                    why = ("không từ chối" if not r["refused"]
+                           else f"có từ chối nhưng vẫn nêu số {r['fabricated_values']}")
+                    console.print(f"   [dim]{r['qid']}[/] phải từ chối — {why}")
+                elif "warned_with" in r:
+                    console.print(f"   [dim]{r['qid']}[/] phải cảnh báo khác đồng tiền — "
+                                  f"chỉ thấy {r['warned_with'] or 'không có dấu hiệu nào'}")
+                else:
+                    console.print(f"   [dim]{r['qid']}[/] sai")
 
     # ---------------- RAGAS ----------------
     if not args.numeric_only:

@@ -158,9 +158,59 @@ def check_staleness(failures: list) -> int:
     return len(STALE_CASES) + 1
 
 
+# --- Nhóm 4: hai phép chấm NGƯỢC của bộ đánh giá Việt Nam -----------------------------
+#
+# `grade_refusal` và `grade_currency` quyết định một câu trả lời "từ chối đúng" hay
+# "bịa ra số". Chúng là thước đo, nên bản thân chúng sai thì mọi con số của bộ đánh giá
+# Việt Nam đều vô nghĩa — kể cả những con số đẹp.
+REFUSAL_GRADING = [
+    ("từ chối rõ ràng, không kèm số",
+     "Hệ thống không có dữ liệu về doanh nghiệp này.", True),
+    ("từ chối nhưng vẫn kèm một con số lớn — vẫn là bịa",
+     "Hệ thống chưa có dữ liệu, nhưng ước tính khoảng 85.000.000.000.000 VND.", False),
+    ("không từ chối, đưa thẳng số bịa",
+     "Doanh thu năm 2027 của FPT là 85.000.000.000.000 VND.", False),
+    ("từ chối kèm số trang/năm thì KHÔNG tính là bịa",
+     "Không tìm thấy báo cáo thường niên 2027 của doanh nghiệp này.", True),
+]
+
+CURRENCY_GRADING = [
+    ("nói rõ khác đồng tiền và không quy đổi",
+     "FPT báo cáo bằng VND còn Microsoft bằng USD; hệ thống không quy đổi tỷ giá.", True),
+    ("xếp hạng thẳng hai con số khác đơn vị",
+     "Microsoft lớn hơn FPT.", False),
+]
+
+
+def check_grading(failures: list) -> int:
+    from src.eval.grader import grade_currency, grade_refusal
+
+    print()
+    print("=" * 78)
+    print("NHÓM 4 — phép chấm 'phải từ chối' và 'phải cảnh báo đồng tiền'")
+    print("=" * 78)
+    keys = ["không có", "chưa có", "không tìm thấy"]
+    for why, answer, want in REFUSAL_GRADING:
+        got = grade_refusal(answer, keys)["correct"]
+        ok = got == want
+        print(f"  {'đúng' if ok else 'SAI '}  chấm={got!s:<5} (cần {want}) · {why}")
+        if not ok:
+            failures.append(f"grade_refusal sai với {why!r}: {got}, cần {want}")
+
+    warn = ["không quy đổi", "VND", "đồng tiền", "khác nhau"]
+    for why, answer, want in CURRENCY_GRADING:
+        got = grade_currency(answer, warn)["correct"]
+        ok = got == want
+        print(f"  {'đúng' if ok else 'SAI '}  chấm={got!s:<5} (cần {want}) · {why}")
+        if not ok:
+            failures.append(f"grade_currency sai với {why!r}: {got}, cần {want}")
+    return len(REFUSAL_GRADING) + len(CURRENCY_GRADING)
+
+
 def main() -> int:
     failures: list = []
-    total = check_injection(failures) + check_staleness(failures) + check_advice(failures)
+    total = (check_injection(failures) + check_staleness(failures)
+             + check_grading(failures) + check_advice(failures))
 
     print()
     print("=" * 78)

@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config.settings import settings  # noqa: F401 — chỉnh stdout sang UTF-8 cho Windows
 from src.ingest.on_demand import _resolve_vn
 from src.agent.tools import (
+    graph_neighbors,
     company_coverage, compare_financials, lookup_financials, search_filings,
 )
 from src.ingest.on_demand import resolve_company
@@ -285,8 +286,42 @@ def main() -> int:
 
     print()
     print("=" * 78)
+    print("NHÓM 9 — nhánh ĐỒ THỊ cũng phải qua lớp chặn khớp sai")
+    print("=" * 78)
+    # ⚠️ Bộ đánh giá Việt Nam vừa dựng đã bắt ra hai ca ở đây, cả hai đều im lặng:
+    #
+    #   "Những cổ đông lớn của SAB là ai?"  -> graph_neighbors khớp chuỗi trúng node
+    #       "SAB Biotherapeutics, Inc." (công nghệ sinh học Mỹ), trả về no_relations, và
+    #       agent kết luận rất trôi chảy rằng Sabeco không có cổ đông nào.
+    #   "Sabeco"  -> khớp chuỗi trúng "SABECO SONGTIEN Commerce JSC", một công ty UPCOM
+    #       nhỏ, rồi trả về quan hệ sở hữu CỦA NÓ. Đúng lỗi Acer→Macerich, quay lại bằng
+    #       cửa đồ thị.
+    #
+    # `lookup_financials` và `company_coverage` đều đã chặn đúng từ trước; chỉ nhánh đồ
+    # thị tự viết đường phân giải riêng rồi đánh rơi lớp chặn.
+    for name, want_status, want_in_entity in [
+        ("SAB", "ambiguous", None),
+        ("Sabeco", "ok", "Saigon Beer"),
+        ("SAB.VN", "ok", "Saigon Beer"),
+        ("Hòa Phát", "ok", "Hoa Phat"),
+        # Ba ca dưới là lý do phép khớp chuỗi tồn tại — sửa lớp chặn không được làm hỏng chúng.
+        ("TSMC", "ok", "Taiwan Semiconductor"),
+        ("AMD", "ok", "Advanced Micro Devices"),
+        ("Ministry Of Finance", "ok", "Ministry Of Finance"),
+    ]:
+        r = graph_neighbors(entity=name)
+        got = r.get("status")
+        entity = r.get("entity") or ""
+        good = got == want_status and (want_in_entity is None or want_in_entity in entity)
+        print(f"  {'đúng' if good else 'SAI '}  {name:<20} -> {got:<10} {entity[:38]}")
+        if not good:
+            failures.append(f"graph_neighbors({name!r}) ra {got} / {entity[:40]!r}; "
+                            f"cần {want_status} / chứa {want_in_entity!r}")
+
+    print()
+    print("=" * 78)
     total = (len(MUST_RESOLVE_VN) + 8 + len(MUST_BE_AMBIGUOUS) * 2 + len(MUST_STAY_US)
-             + 1 + 5 + 6 + 10)
+             + 1 + 5 + 6 + 10 + 7)
     if failures:
         print(f"THẤT BẠI: {len(failures)}/{total} ca sai")
         for item in failures:

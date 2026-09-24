@@ -328,6 +328,24 @@ def _resolve_vn(query: str) -> List[Dict[str, str]]:
         return [{**info, "match": "ticker", "confidence": "high"}]
 
     simple = _simplify(raw)
+
+    # ⚠️ PHẦN LÕI CÓ THỂ CHÍNH LÀ MÃ CHỨNG KHOÁN — hỏi điều đó TRƯỚC chốt độ dài.
+    #
+    # `_simplify` cắt hậu tố loại hình doanh nghiệp, nên "FPT Corp" rút còn "fpt" — ba ký
+    # tự, rơi thẳng vào chốt "quá ngắn thì bỏ qua" ngay dưới. Hệ quả: mọi tên ba chữ cái
+    # kèm hậu tố đều trượt, dù chuỗi người dùng gõ dài và rõ ràng.
+    #
+    # Đo thật: bộ câu hỏi đánh giá Việt Nam vừa sinh ra đã hỏi "FPT Corp" (đây là một
+    # trong các tên VCI ghi cho FPT) và nhận về not_found. Chốt độ dài vốn để chặn khớp
+    # bừa trên chuỗi quá ngắn, nhưng nó không nên chặn cả một mã chứng khoán viết đúng.
+    # Thử cả hai cách rút gọn: bỏ khoảng trắng ("FPT Corp" -> FPT sau khi cắt hậu tố),
+    # và bỏ luôn các từ pháp lý ("VNM JSC" -> VNM, vì "JSC" nằm trong `_FILLER` chứ không
+    # nằm trong bảng hậu tố mà `_simplify` cắt).
+    for compact in (simple.replace(" ", "").upper(),
+                    "".join(_core_words(simple)).upper()):
+        if compact and compact in table:
+            return [{**table[compact], "match": "ticker", "confidence": "high"}]
+
     if len(simple) < 4:
         return []
 

@@ -227,7 +227,9 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 
 # --- Đánh giá ---
 .venv/Scripts/python.exe scripts/07_build_testset.py                 # sinh 34 câu hỏi
-.venv/Scripts/python.exe scripts/08_run_eval.py --numeric-only       # chấm xác định
+.venv/Scripts/python.exe scripts/08_run_eval.py --numeric-only       # chấm xác định (Mỹ)
+.venv/Scripts/python.exe scripts/08_run_eval.py --vietnam --numeric-only   # bộ Việt Nam
+.venv/Scripts/python.exe scripts/08_run_eval.py --all --numeric-only       # cả hai bộ
 .venv/Scripts/python.exe scripts/08_run_eval.py                      # thêm RAGAS
 
 # --- Giao diện web ---
@@ -298,9 +300,39 @@ không bỏ được, nhưng người dùng bình thường không cần nhìn �
 | `GET /api/coverage?q=` | hệ thống đang có gì về một doanh nghiệp |
 | `POST /api/ask` | hỏi, nhận luồng SSE từng bước |
 | `POST /api/ask-sync` | hỏi, nhận một JSON khi xong — cho tích hợp máy-với-máy |
+| `GET /api/sessions` · `POST` | danh sách phiên trò chuyện · tạo phiên mới |
+| `GET` · `PATCH` · `DELETE /api/sessions/{id}` | đọc đủ hội thoại · đổi tên · xóa |
 | `GET /` · `GET /chat` | hai trang giao diện |
 
 Tài liệu tự sinh: `http://localhost:8000/docs`
+
+### Phiên trò chuyện
+
+Trang `/chat` giữ nhiều cuộc trò chuyện như các trợ lý quen thuộc: thanh bên liệt kê
+phiên, tiêu đề lấy từ câu hỏi đầu tiên, mở lại phiên cũ dựng lại đủ hội thoại.
+
+**Hỏi tiếp được là thay đổi thật sự, không phải trang trí.** Trước đó mỗi câu đứng một
+mình: hỏi *"Doanh thu FPT 2025?"* thì đúng, hỏi tiếp *"còn năm trước thì sao?"* thì hỏng
+— và hỏng theo kiểu khó thấy nhất, vì nó **không báo lỗi**: khối định tuyến vẫn chọn một
+công cụ, vẫn trả về một câu trả lời, chỉ là về một doanh nghiệp nào đó nó tự đoán.
+
+Vì vậy ngữ cảnh đi vào **khối định tuyến**, không chỉ khối viết câu. Chỗ cần biết "FPT"
+là chỗ chọn tham số cho công cụ; đưa muộn hơn thì công cụ đã lấy sai dữ liệu rồi và khối
+viết câu chỉ còn việc diễn đạt cái sai đó cho trôi chảy.
+
+**Lịch sử không được trở thành nguồn dữ liệu.** Các lượt trước vào prompt để hiểu ngữ
+cảnh, nhưng số liệu để trả lời vẫn chỉ lấy từ công cụ của lượt hiện tại, và lớp đối chiếu
+số vẫn chỉ so với dữ liệu của lượt này. Coi câu trả lời cũ là nguồn hợp lệ thì một con số
+sai ở lượt một sẽ tự hợp thức hóa ở mọi lượt sau.
+
+Lưu ở SQLite riêng (`data/chat.db`) chứ không nhét vào Neo4j/Qdrant: hai kho đó lưu tri
+thức, đây là nhật ký hội thoại. Trộn vào nhau thì thống kê độ phủ ở trang chủ bắt đầu
+lẫn, và một lần nạp lại dữ liệu có thể cuốn mất lịch sử chat.
+
+⚠️ **Chưa có đăng nhập.** Cột `owner` có sẵn và luôn mang giá trị `local` để sau này thêm
+xác thực không phải chuyển đổi dữ liệu, nhưng hiện tại ai mở được trang là thấy mọi phiên.
+
+
 
 ### Deploy
 
@@ -793,6 +825,77 @@ Vì vậy dự án dùng **hai thước đo độc lập**:
 |---|---|---|---|
 | **Dò số** | 23 | **Không** | Câu trả lời có chứa đúng con số doanh nghiệp khai với SEC không (sai số 1%) |
 | RAGAS | 11 | Có | faithfulness, answer_relevancy, context_precision/recall |
+
+### Bộ câu hỏi Việt Nam — và vì sao nó phải tồn tại riêng
+
+Bộ 37 câu ở trên **không có câu nào về doanh nghiệp Việt Nam**. Toàn NVIDIA, Microsoft,
+TSMC. Trong khi phần Việt Nam là khối dữ liệu lớn nhất của dự án: 1.532 doanh nghiệp,
+50.214 đoạn báo cáo thường niên, ba nguồn, một mã phải OCR.
+
+Nghĩa là câu *"hệ thống đạt 100% độ chính xác số liệu"* chỉ đúng với phía Mỹ. Phía Việt
+Nam, về mặt bằng chứng, ngang với chưa kiểm gì.
+
+`src/eval/testset_vn.py` sinh bộ câu hỏi riêng, **năm nhóm**, trong đó hai nhóm đo chiều
+ngược lại với ba nhóm còn lại:
+
+| Nhóm | Đo cái gì | Chấm bằng |
+|---|---|---|
+| `vn_numeric` | tra số VCI, hỏi bằng **tên tiếng Việt** | máy, sai số 1% |
+| `vn_qualitative` | trích đúng báo cáo thường niên của đúng doanh nghiệp | recall thực thể |
+| `vn_ownership` | quan hệ cổ đông — dữ liệu phía Mỹ không có | recall thực thể |
+| `vn_refusal` | **phải từ chối**: hỏi thứ hệ thống không có | có cụm từ chối **và** không có số lớn nào |
+| `vn_currency` | **phải cảnh báo**: so sánh VND với USD | có nói "không quy đổi" |
+
+Hai nhóm cuối quan trọng không kém ba nhóm đầu. Một hệ thống trả lời đúng mọi câu trả
+lời được, nhưng cũng "trả lời" cả những câu nó không có dữ liệu, thì vẫn hỏng — chỉ là
+hỏng ở chỗ không ai nghĩ tới mà đo. Cả ba lỗi nặng nhất từng gặp trong dự án đều thuộc
+loại đó: doanh thu "Acer" hóa ra là của Macerich, hỏi "Sabeco" ra một công ty UPCOM, và
+"SAB (Sabeco)" bị báo không có dữ liệu trong khi báo cáo nằm sẵn trong kho.
+
+**Kết quả lần chạy đầu tiên** (43 câu, `gemma-4-26b-a4b-qat` chạy local, 11 phút):
+
+| Nhóm | Số câu | Độ chính xác số | Nhắc đúng doanh nghiệp |
+|---|---|---|---|
+| `vn_numeric` | 30 | **100%** | 100% |
+| `vn_qualitative` | 6 | — | 100% |
+| `vn_ownership` | 3 | — | 100% |
+| `vn_refusal` | 3 | **100%** | — |
+| `vn_currency` | 1 | **100%** | — |
+
+**34/34 = 100% độ chính xác số liệu.** Ba câu hỏi về thứ hệ thống không có — mã chưa nạp,
+năm 2027, doanh nghiệp không tồn tại — đều bị từ chối đúng, không câu nào bịa ra con số.
+
+**Bộ đề sinh mỗi lần chạy, không lưu ra tệp.** Dữ liệu VCI được nạp lại theo quý, nên một
+bộ đề đóng băng sẽ lặng lẽ lệch khỏi dữ liệu thật rồi bắt đầu chấm sai những câu trả lời
+đúng — thước đo hỏng âm thầm còn tệ hơn không có thước đo.
+
+**Và bộ đề đã bắt được bốn lỗi thật — hai ở chính nó, hai trong code.** Lần sinh đầu tiên ra câu *"ACB ghi
+nhận vốn chủ sở hữu bao nhiêu…"* — mã "ACB" trùng Aurora Cannabis nên agent hỏi lại,
+hành vi đúng nhưng bộ đánh giá chấm là sai; nay bộ đề tự thử các dạng tên và chỉ dùng
+dạng phân giải được về đúng mã. Lỗi thứ hai nằm ở chính bộ phân giải: `"FPT Corp"` trả
+về *không tìm thấy*, vì `_simplify` cắt hậu tố "Corp" còn `"fpt"` — ba ký tự, rơi thẳng
+vào chốt "quá ngắn thì bỏ qua". Mọi tên ba chữ cái kèm hậu tố đều trượt như vậy.
+
+Hai lỗi nặng hơn lộ ra ngay ở lần chạy đầu, và cả hai đều **im lặng**. Hỏi *"Những cổ
+đông lớn của SAB là ai?"*, agent trả lời rất trôi chảy rằng **SAB Biotherapeutics, Inc.**
+— một công ty công nghệ sinh học Mỹ — không có quan hệ sở hữu nào. Nó lặng lẽ chọn một
+bên thay vì hỏi lại. Truy ra: `graph_neighbors` tự viết đường phân giải riêng, khớp chuỗi
+trong đồ thị **trước**, nên không bao giờ hỏi tới lớp chặn nhập nhằng mà
+`lookup_financials` và `company_coverage` đã dùng đúng từ lâu.
+
+Sửa xong thì phép thử lộ tiếp ca thứ hai: *"Sabeco"* khớp chuỗi trúng **SABECO SONGTIEN
+Commerce JSC**, một công ty UPCOM nhỏ có chữ SABECO trong tên, rồi trả về quan hệ sở hữu
+của nó. Đúng lỗi Acer→Macerich, quay lại bằng cửa đồ thị.
+
+Cách sửa: **phân giải có thẩm quyền đi trước khớp chuỗi**. `resolve_company` đã có ba
+tầng khớp và lớp chặn nhập nhằng để trả lời câu "Sabeco là mã nào"; khi nó trả lời chắc
+chắn thì câu trả lời đó thắng. Khớp chuỗi chỉ còn là phương án dự phòng cho thực thể
+**không phải** doanh nghiệp niêm yết — người, bộ ngành, quỹ — nơi không có mã nào để
+phân giải. NHÓM 9 trong `tests/test_vietnam.py` khóa cả hai ca lại, kèm ba ca đối chứng
+(TSMC, AMD, "Ministry Of Finance") vì chúng chính là lý do phép khớp chuỗi tồn tại.
+
+Đây là **lần thứ ba** cùng một kiểu lỗi trong dự án: một công cụ tự viết đường phân giải
+riêng rồi đánh rơi lớp chặn. Hai lần trước là `search_filings` và `_resolve_vn`.
 
 Câu hỏi tra số được **sinh tự động từ chính dữ liệu XBRL**, nên đáp án chuẩn là con số
 chính xác chứ không phải đoạn văn tham chiếu viết tay — muốn bao nhiêu câu cũng có, và

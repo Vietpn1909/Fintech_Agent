@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 # Từ chỉ bậc độ lớn -> hệ số nhân.
 # Có cả biến thể KHÔNG DẤU, vì model chạy local thỉnh thoảng trả lời thiếu dấu tiếng
@@ -234,3 +234,55 @@ def grade_entities(answer: str, expected_entities: List[str]) -> float:
     upper = (answer or "").upper()
     hits = sum(1 for e in expected_entities if e.upper() in upper)
     return hits / len(expected_entities)
+
+
+# ---------------------------------------------------------------- hai phép chấm NGƯỢC
+#
+# Ba phép chấm ở trên đều hỏi "câu trả lời có đúng không". Hai phép dưới đây hỏi ngược
+# lại: "hệ thống có biết im lặng đúng lúc không". Cả ba lỗi nặng nhất từng gặp trong dự
+# án đều thuộc loại này — trả lời trôi chảy về thứ không có dữ liệu.
+
+
+def grade_refusal(answer: str, must_refuse: List[str]) -> Dict[str, Any]:
+    """Câu trả lời ĐÚNG là lời từ chối. Sai là khi nó đưa ra một con số.
+
+    Hai điều kiện, phải đạt cả hai:
+      * có ít nhất một cụm từ chối ("không có", "chưa có"…)
+      * KHÔNG có con số lớn nào — vì một con số lớn trong câu trả lời cho câu hỏi không
+        có dữ liệu thì chỉ có thể là bịa ra.
+    """
+    low = (answer or "").lower()
+    refused = any(k.lower() in low for k in must_refuse)
+    # Ngưỡng một triệu: dưới đó là năm, số trang, số lượng — không phải số liệu tài chính.
+    big = [v for v in extract_values(answer or "") if abs(v) >= 1e6]
+    return {
+        "correct": bool(refused and not big),
+        "refused": refused,
+        "fabricated_values": big[:3],
+    }
+
+
+def grade_currency(answer: str, must_warn: List[str]) -> Dict[str, Any]:
+    """Câu trả lời ĐÚNG là nói rõ hai đồng tiền khác nhau và không quy đổi được."""
+    low = (answer or "").lower()
+    hits = [k for k in must_warn if k.lower() in low]
+    return {"correct": len(hits) >= 2, "warned_with": hits}
+
+
+def grade_entity_any(answer: str, forms: List[str]) -> float:
+    """1.0 nếu câu trả lời nhắc tới doanh nghiệp đó dưới BẤT KỲ dạng nào.
+
+    ⚠️ KHÁC `grade_entities`: bên kia đòi có MỌI thực thể trong danh sách, dùng cho câu
+    sàng lọc ("nêu 5 doanh nghiệp thỏa điều kiện"). Ở đây danh sách là các CÁCH GỌI KHÁC
+    NHAU của cùng một doanh nghiệp, nên khớp một dạng là đủ.
+
+    Vì sao cần: người dùng hỏi "SeABank ghi nhận lợi nhuận sau thuế bao nhiêu", agent trả
+    lời đúng số và viết "SeABank" — không có lý do gì để in thêm mã "SSB". Đo bằng mã
+    trần thì năm câu trả lời hoàn toàn đúng bị chấm 0. Một thước đo phạt cách diễn đạt
+    thay vì phạt nội dung sai thì rồi sẽ có người tắt nó đi, và mất luôn cả phần nó đo
+    đúng — bắt câu trả lời nói về NHẦM doanh nghiệp.
+    """
+    if not forms:
+        return 1.0
+    upper = (answer or "").upper()
+    return 1.0 if any(f and f.upper() in upper for f in forms) else 0.0
