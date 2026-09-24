@@ -1026,3 +1026,23 @@ run_web.py                  Kiểm tra phụ thuộc rồi khởi động máy c
 app/streamlit_app.py        (cũ) Giao diện Streamlit — giữ lại để gỡ lỗi, xem mục Giao diện web
 scripts/                    Các bước chạy, đánh số theo thứ tự
 ```
+
+
+## Giấy phép
+
+Mã nguồn: **MIT** (xem `LICENSE`).
+
+Giấy phép đó **không** áp dụng cho dữ liệu mà mã này tải về, vì dữ liệu đó không thuộc
+về dự án:
+
+| Nguồn | Tình trạng |
+|---|---|
+| Hồ sơ SEC EDGAR | tài liệu công của chính phủ Mỹ, phạm vi công cộng — nhưng phải tuân Fair Access Policy (khai danh tính qua User-Agent, tối đa 10 request/giây) |
+| Báo cáo thường niên doanh nghiệp Việt Nam | **bản quyền của chính doanh nghiệp**. Chỉ tải về máy để phân tích, không phân phối lại — nằm trong `data/raw/`, đã .gitignore |
+| Số liệu và cổ đông từ VCI | theo điều khoản sử dụng của VCI |
+
+Ai dùng lại mã này cần tự kiểm điều khoản của từng nguồn, nhất là nếu dùng cho mục đích
+thương mại.
+
+⚠️ **Tên trong `LICENSE` hiện là tên tài khoản GitHub.** Nếu nộp làm đồ án thì nên thay
+bằng họ tên thật.

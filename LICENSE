@@ -1,0 +1,51 @@
+MIT License
+
+Copyright (c) 2026 Vietpn1909
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+PHẠM VI CỦA GIẤY PHÉP NÀY / SCOPE OF THIS LICENSE
+
+Giấy phép trên áp dụng cho MÃ NGUỒN trong kho này. Nó KHÔNG áp dụng cho dữ liệu
+mà mã này tải về, vì dữ liệu đó không thuộc về dự án:
+
+  * Hồ sơ SEC EDGAR (10-K, XBRL) — tài liệu công của chính phủ Hoa Kỳ, thuộc phạm
+    vi công cộng. Việc truy cập phải tuân thủ Fair Access Policy của SEC, trong đó
+    yêu cầu khai báo danh tính qua User-Agent và giới hạn 10 request mỗi giây.
+
+  * Báo cáo thường niên của doanh nghiệp Việt Nam (PDF) — thuộc bản quyền của
+    chính doanh nghiệp phát hành. Dự án chỉ tải về máy cục bộ để phân tích, không
+    phân phối lại. Các tệp này nằm trong `data/raw/` và đã được .gitignore.
+
+  * Số liệu tài chính và thông tin cổ đông từ VCI (iq.vietcap.com.vn) — thuộc điều
+    khoản sử dụng của VCI.
+
+Người dùng lại mã này chịu trách nhiệm tự kiểm tra điều khoản của từng nguồn dữ
+liệu trước khi sử dụng, đặc biệt nếu dùng cho mục đích thương mại.
+
+The MIT license above covers the SOURCE CODE in this repository only. It does not
+cover the data this code downloads: SEC EDGAR filings are US public domain but
+subject to SEC's Fair Access Policy; Vietnamese annual reports remain the
+copyright of their issuers and are fetched to local disk for analysis only, never
+redistributed (they live in `data/raw/`, which is gitignored); financial and
+shareholder data from VCI is subject to VCI's terms of use. Anyone reusing this
+code is responsible for checking each data source's terms, especially for
+commercial use.
