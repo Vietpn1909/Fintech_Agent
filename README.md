@@ -225,6 +225,13 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/14_load_vietnam_profiles.py --resume --apply     # mô tả DN · ~11 phút
 .venv/Scripts/python.exe scripts/15_load_vietnam_annual_reports.py --apply   # báo cáo thường niên · ~12 phút
 
+# --- Bon chuc nang vuot ra ngoai hoi-dap ---
+.venv/Scripts/python.exe scripts/19_company_brief.py FPT   # ho so phan tich tu dong
+.venv/Scripts/python.exe scripts/20_watch.py --add FPT     # theo doi mot doanh nghiep
+.venv/Scripts/python.exe scripts/20_watch.py --check       # du lieu da doi nhung gi
+.venv/Scripts/python.exe scripts/21_ownership.py Vinamilk  # mang luoi so huu nhieu tang
+.venv/Scripts/python.exe scripts/22_peers.py FPT           # so sanh voi nhom cung nganh
+
 # --- Vận hành ---
 .venv/Scripts/python.exe scripts/18_refresh.py             # chay thu, xem cai gi da cu
 .venv/Scripts/python.exe scripts/18_refresh.py --apply     # cap nhat that
@@ -371,7 +378,7 @@ máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của
 | Đồ thị nền | ✅ | **7.772 Company · 59.802 FinancialYear** (6.074 Mỹ + 1.532 Việt Nam) |
 | Vector index | ✅ | **23.869 chunk · 47 doanh nghiệp** + nạp theo yêu cầu (36–45 giây/công ty) |
 | Phân giải tên công ty | ✅ | Khớp theo ranh giới từ, neo vào CIK, chịu được gõ sai |
-| Bộ công cụ agent | ✅ | 7 công cụ, kiểm thử trên dữ liệu thật, không gọi LLM |
+| Bộ công cụ agent | ✅ | **11 công cụ**, kiểm thử trên dữ liệu thật, không gọi LLM |
 | Sơ đồ trạng thái LangGraph | ✅ | Biên dịch chạy được, có vòng lặp suy xét |
 | Bộ câu hỏi kiểm thử | ✅ | **34 câu** sinh từ dữ liệu thật (23 chấm xác định + 11 RAGAS) |
 | Bộ chấm dò số | ✅ | 12/12 ca kiểm thử, nhận 6 cách viết số khác nhau |
@@ -379,8 +386,141 @@ máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của
 | Đồ thị tri thức | ✅ | **2.567 bộ ba · 265 doanh nghiệp có cạnh · 14/14 loại quan hệ** |
 | Gộp thực thể | ✅ | 176 node trùng đã gộp; neo theo CIK nên nạp lại không sinh trùng |
 | Agent đầu-cuối | ✅ | **26/26 = 100% độ chính xác số liệu** · recall thực thể 100% ở 4/5 nhóm |
+| Chức năng ngoài hỏi–đáp | ✅ | Hồ sơ tự động · theo dõi & cảnh báo · mạng lưới sở hữu · so sánh ngành |
+| Kiểm thử | ✅ | **231 ca** (55 phân giải · 67 Việt Nam · 23 đối chiếu số · 25 guardrail · 61 chức năng mới) |
 | Đa tiền tệ | ✅ | USD, EUR, JPY, TWD, CNY, DKK... có chặn trộn lẫn khi so sánh |
 | Chấm điểm RAGAS | ⏳ | Tùy chọn — thước đo dò số đã đủ mạnh và không cần LLM giám khảo |
+
+---
+
+## Bốn chức năng vượt ra ngoài hỏi–đáp
+
+Ba tầng dữ liệu và bảy công cụ đầu tiên đều phục vụ MỘT việc: người dùng hỏi, agent trả
+lời. Điều đó đặt toàn bộ gánh nặng lên người dùng — họ phải biết trước cần hỏi gì. Bốn
+chức năng dưới đây đảo lại: agent tự chạy một chuỗi bước đã định sẵn.
+
+Cả bốn đi theo cùng một nguyên tắc, và nguyên tắc ấy là điều quan trọng nhất cần nhớ:
+
+> **Mã lệnh quyết định chạy gì và tính mọi con số. LLM chỉ viết lời, và lời đó vẫn phải
+> qua lớp đối chiếu số.**
+
+Lý do: ở hỏi–đáp, câu hỏi có thể là bất cứ thứ gì nên phải để LLM chọn công cụ. Ở đây câu
+hỏi luôn cố định ("doanh nghiệp này thế nào", "ai đứng sau nó", "nó mạnh hay yếu so với
+ngành"), nên danh sách việc phải làm viết sẵn được. Để LLM tự chọn chỉ thêm một chỗ hỏng
+mà không thêm khả năng nào.
+
+### 1. Hồ sơ phân tích tự động — `scripts/19_company_brief.py`
+
+Đưa một cái tên, agent chạy bảy bước thu thập rồi dựng hồ sơ bảy mục: quy mô và xu hướng,
+vị trí trong ngành, rủi ro doanh nghiệp tự nêu, chiến lược, cơ cấu sở hữu, quan hệ kinh
+doanh, và **điều hệ thống KHÔNG biết**.
+
+Mục cuối là mục quan trọng nhất, và nó được **sinh từ chính dữ liệu thiếu** chứ không viết
+tay: không có số liệu quý, không có giá cổ phiếu, báo cáo mới nhất đã mấy năm tuổi, chữ do
+OCR. Một hồ sơ trông đầy đủ khiến người đọc mặc định phần không được nhắc là không đáng kể.
+
+### 2. Theo dõi & cảnh báo — `scripts/20_watch.py`
+
+Giữ một danh sách doanh nghiệp, chụp ảnh nền dữ liệu của từng mã, và mỗi lần cập nhật thì
+so với ảnh nền để báo cái gì đã đổi. Chạy tự động ở cuối mỗi lần `18_refresh.py --apply`.
+
+Sáu loại thay đổi được phát hiện, và loại **đáng giá nhất là loại không ai để ý**: `so_cu_bi_sua`
+— một năm tài chính đã nằm trong kho từ lâu bỗng mang giá trị khác, tức doanh nghiệp khai
+lại hoặc nguồn sửa số. Không có gì khác trong hệ thống báo ra việc này, trong khi mọi câu
+trả lời đã đưa dựa trên con số cũ đều sai từ lúc đó.
+
+Hai quy tắc được viết cứng vào thiết kế:
+
+* **Cảnh báo nói DỮ LIỆU đổi, không nói THẾ GIỚI đổi.** Hôm nay xuất hiện báo cáo 2024
+  không có nghĩa doanh nghiệp vừa công bố hôm nay — rất có thể họ công bố từ tháng ba còn
+  hệ thống tới nay mới nạp. Ngày trong cảnh báo là ngày *phát hiện*.
+* **Chưa theo dõi ≠ không có thay đổi.** Công cụ `recent_changes` trả trạng thái riêng
+  `not_watched`, vì trả lời "không có thay đổi nào" cho một mã chưa từng chụp ảnh nền là
+  câu trả lời của một hệ thống chưa hề nhìn.
+
+### 3. Mạng lưới sở hữu — `scripts/21_ownership.py`
+
+Đi ngược chuỗi `OWNED_BY` nhiều tầng để tìm ai đứng sau một doanh nghiệp qua pháp nhân
+trung gian — phép toán mà cơ sở dữ liệu quan hệ làm rất tệ còn đồ thị làm rất tự nhiên.
+Đo được trong đồ thị: 891 cạnh sở hữu doanh nghiệp↔doanh nghiệp, 511 chuỗi hai tầng, 283
+chuỗi ba tầng.
+
+**Phân biệt quan trọng nhất của cả chức năng này:**
+
+| | Quyền lợi kinh tế | Quyền kiểm soát |
+|---|---|---|
+| Là gì | tích các tỷ lệ dọc chuỗi — phần lãi thực nhận | mọi mắt xích đều trên 50% |
+| Trường | `quyen_loi_kinh_te_pct` | `chuoi_kiem_soat` (boolean) |
+
+A nắm 51% của B, B nắm 51% của C: quyền lợi kinh tế của A trong C là **26,01%**, nhưng A
+**kiểm soát C hoàn toàn**. Nhân phần trăm rồi gọi kết quả là "mức độ kiểm soát" làm một
+quan hệ chi phối tuyệt đối trông như khoản đầu tư nhỏ.
+
+Ca thật trong dữ liệu, dùng làm ca kiểm thử: Vinamilk → Vilico (68,94%) → Mocchau Milk
+(59,3%) — quyền lợi kinh tế 40,88%, **kiểm soát: CÓ**. Cùng qua Vilico nhưng sang Lâm Đồng
+Foodstuffs (38,3%) thì 26,4% và **kiểm soát: KHÔNG**. Con số đơn thuần không phân biệt được
+hai trường hợp này.
+
+#### Một lỗi đo được, và vì sao nó không sửa được bằng lời nhắc
+
+Hỏi thử *"Vinamilk kiểm soát Mộc Châu Milk ở mức nào?"*, agent trả lời **"Vinamilk không
+kiểm soát"** — ngược hẳn sự thật. Nó đọc `chuoi_nay_kiem_soat: false` của chuỗi trực tiếp
+8,85%, một trong 14 chuỗi trả về, và bỏ qua chuỗi qua Vilico có `true`.
+
+Trước đó kết quả đã mang sẵn một dòng `luu_y_bat_buoc` dặn đúng việc ấy, và mô hình vẫn
+bỏ qua. Ba lần sửa, mỗi lần một bậc:
+
+1. **Thêm `chain_between`** — hỏi về hai doanh nghiệp trước đó chỉ đi tìm *cổ đông chung*,
+   không hề hỏi *bên này có nắm bên kia không*. Câu trả lời thiếu hẳn chuỗi 40,88%.
+2. **Đổi tên trường thành `chuoi_nay_kiem_soat`** — chữ "này" nói rõ nó đúng cho RIÊNG một
+   chuỗi, và thêm `ket_luan` viết sẵn bằng lời ở mức quan hệ.
+3. **Tách hẳn hai danh sách** `cac_chuoi_kiem_soat_doanh_nghiep_nay` và
+   `cac_chuoi_doanh_nghiep_nay_kiem_soat`, chỉ chứa chuỗi kiểm soát.
+
+Chỉ sau bước 3 câu trả lời mới đúng. Bài học: **lời nhắc trong prompt là thứ mô hình có
+thể bỏ qua; một trường dữ liệu chỉ chứa kết luận thì không.** Khi 12/14 chuỗi là nhiễu,
+việc lọc phải do mã lệnh làm, không phải giao cho mô hình rồi dặn nó cẩn thận.
+
+### 4. So sánh ngành tự động — `scripts/22_peers.py`
+
+"Biên lợi nhuận ròng 11%" không nói lên điều gì cho tới khi biết ngành đạt bao nhiêu. Tự
+tìm nhóm so sánh theo hai cách, và **nói rõ đang dùng cách nào**:
+
+* **ngành** — doanh nghiệp Việt Nam có sẵn trường `sector`, 13 ngành, 1.532 doanh nghiệp
+* **`COMPETES_WITH`** — doanh nghiệp Mỹ không có trường ngành, nhưng có 215 cạnh đối thủ do
+  LLM trích từ chính hồ sơ 10-K. Đây là đối thủ **doanh nghiệp tự nêu tên**, chính xác hơn
+  hẳn một ô phân loại, nên nó được ưu tiên.
+
+Bốn chốt chặn, mỗi chốt chặn một cách cho ra con số sai mà không báo lỗi:
+
+* **Không bao giờ so giữa hai đồng tiền.** Doanh thu tính bằng VND đặt cạnh doanh thu tính
+  bằng USD cho ra thứ tự hoàn toàn bịa. Số doanh nghiệp bị loại được **đếm và nêu ra**.
+* **Mẫu số riêng cho từng chỉ tiêu.** Đo được: 28/28 ngân hàng Việt Nam không có
+  `gross_profit`. Xếp hạng trên chỉ tiêu mà nửa nhóm không có sẽ cho "đứng thứ 3" trong khi
+  chỉ có 4 doanh nghiệp tham gia.
+* **Chọn năm so sánh theo độ phủ của nhóm**, không theo năm mới nhất của riêng doanh nghiệp
+  đang xét — nếu không thì doanh nghiệp công bố sớm được so với vài doanh nghiệp cũng công
+  bố sớm, rồi gọi đó là "xếp hạng ngành".
+* **Dưới 3 doanh nghiệp thì không dựng bảng.** "Đứng thứ 2 trong 3" là câu vô dụng đội lốt
+  một con số. Trả về lý do thay vì một bảng trông thuyết phục.
+
+### Dùng thử
+
+```bash
+.venv/Scripts/python.exe scripts/19_company_brief.py FPT              # ho so day du
+.venv/Scripts/python.exe scripts/19_company_brief.py NVDA --no-narrate  # thuan du lieu, 2 giay
+.venv/Scripts/python.exe scripts/20_watch.py --add FPT --add "Hoa Phat"
+.venv/Scripts/python.exe scripts/20_watch.py --check
+.venv/Scripts/python.exe scripts/20_watch.py --history --days 7
+.venv/Scripts/python.exe scripts/21_ownership.py Vinamilk
+.venv/Scripts/python.exe scripts/21_ownership.py FPT --common "FPT Retail"
+.venv/Scripts/python.exe scripts/22_peers.py FPT
+.venv/Scripts/python.exe scripts/22_peers.py "Hoa Phat" --year 2024
+```
+
+Hoặc hỏi thẳng trong khung chat — agent tự chọn công cụ:
+*"Phân tích giúp tôi doanh nghiệp Hòa Phát"* · *"Ai thực sự đứng sau Vinamilk?"* ·
+*"FPT mạnh hay yếu so với ngành?"* · *"Có gì mới với FPT không?"*
 
 ---
 
@@ -1003,8 +1143,14 @@ src/graph/
     extractor.py            Prompt trích xuất + kiểm tra kết quả
     store.py                Neo4j: nạp dữ liệu và các truy vấn cho agent
 src/agent/
-    tools.py                7 công cụ, Cypher viết sẵn và tham số hóa (không để LLM sinh)
+    tools.py                11 công cụ, Cypher viết sẵn và tham số hóa (không để LLM sinh)
     graph_agent.py          Sơ đồ trạng thái LangGraph: định tuyến -> thực thi -> suy xét
+    verify.py               Đối chiếu từng con số trong câu trả lời với dữ liệu nguồn
+    brief.py                Hồ sơ tự động: bảy bước thu thập, mã lệnh tính mọi con số
+    brief_render.py         Dựng hồ sơ thành markdown, LLM chỉ viết lời cho từng mục
+    watch.py                Theo dõi & cảnh báo: ảnh nền, so sánh, sáu loại thay đổi
+    ownership.py            Mạng lưới sở hữu nhiều tầng — kinh tế KHÁC kiểm soát
+    peers.py                So sánh ngành: tự tìm nhóm, xếp hạng, chặn trộn đồng tiền
 src/eval/
     testset.py              Sinh câu hỏi từ dữ liệu thật + câu hỏi định tính viết tay
     grader.py               Chấm dò số, xác định, không dùng LLM
@@ -1020,8 +1166,14 @@ web/static/chat.js          Đọc SSE, dựng Markdown, gấp dấu vết agent
 src/graph/curation.py       Áp bảng dọn thực thể NGAY TẠI bước nạp (bền qua chạy lại)
 src/ingest/vietnam.py       Tầng số liệu doanh nghiệp Việt Nam, gọi thẳng API VCI
 config/entity_merges.json   Danh sách gộp/xóa node đồ thị — DUYỆT BẰNG TAY
+src/chat/store.py           Phiên trò chuyện và lịch sử tin nhắn (SQLite)
+src/obs/logs.py             Nhật ký JSON Lines, nối theo mã vết
+src/obs/freshness.py        Dữ liệu mới tới đâu — đo bằng chính dữ liệu, không tin sổ sách
 tests/test_resolver.py      Hồi quy bộ phân giải tên: 16 ca từ chối, 30 ca nhận đúng
 tests/test_vietnam.py       Tầng Việt Nam: nhận đúng, báo nhập nhằng, không lẫn tiền tệ
+tests/test_verify.py        Lớp đối chiếu số: 8 ca phải bắt, 15 ca không được báo nhầm
+tests/test_guardrails.py    Các luật trong prompt — chỉ chứng minh được bằng cách hỏi thật
+tests/test_features.py      Ba chức năng mới: theo dõi, mạng lưới sở hữu, so sánh ngành
 run_web.py                  Kiểm tra phụ thuộc rồi khởi động máy chủ
 app/streamlit_app.py        (cũ) Giao diện Streamlit — giữ lại để gỡ lỗi, xem mục Giao diện web
 scripts/                    Các bước chạy, đánh số theo thứ tự

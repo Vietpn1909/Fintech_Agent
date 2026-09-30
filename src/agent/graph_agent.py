@@ -126,6 +126,42 @@ TOOL_SPECS = {
                  "specific figure (use lookup_financials) or one topic (use search_filings)."),
         "args": {"company": "str", "years": "int optional, default 5"},
     },
+    "peer_benchmark": {
+        "desc": ("Rank ONE company against an automatically-found peer group: same "
+                 "sector for Vietnamese companies, self-declared COMPETES_WITH rivals "
+                 "for US ones. Returns rank and percentile for revenue, profit, assets, "
+                 "equity, gross/net margin, ROE and ROA. Use for 'how does X compare to "
+                 "its industry', 'X manh hay yeu so voi nganh', 'bien loi nhuan cua X co "
+                 "tot khong'. Unlike compare_financials this needs NO list of rivals. "
+                 "Each ranking row carries its OWN `so_doanh_nghiep_co_so_lieu` "
+                 "denominator — never reuse one metric's denominator for another."),
+        "args": {"company": "str", "year": "int optional"},
+    },
+    "ownership_network": {
+        "desc": ("Multi-hop OWNERSHIP network around a company: who owns it directly AND "
+                 "through intermediary entities, what it owns through subsidiaries, and "
+                 "other companies sharing a controlling shareholder. Use for 'who really "
+                 "owns X', 'ai dung sau X', 'cong ty me cua X', 'X va Y co lien quan gi "
+                 "khong'. Prefer this over graph_neighbors for ownership questions: "
+                 "graph_neighbors only walks ONE hop. The result carries TWO different "
+                 "numbers — `quyen_loi_kinh_te_pct` (product of stakes = economic "
+                 "interest) and `chuoi_nay_kiem_soat`, a boolean that applies to ONE "
+                 "chain only. Control CANNOT be inferred from the percentage. When the "
+                 "result carries `ket_luan` or `ket_luan_kiem_soat`, STATE THAT verdict; "
+                 "never override it with the boolean of a single chain."),
+        "args": {"company": "str", "depth": "int optional, default 3",
+                 "other": "str optional — compare two companies' shared shareholders"},
+    },
+    "recent_changes": {
+        "desc": ("What CHANGED in the system's data about a company recently: new fiscal "
+                 "years loaded, previously stored figures that were revised, shareholders "
+                 "appearing or leaving, ownership percentages moving, new report text. "
+                 "Use for 'has anything changed for X', 'what is new with X', 'co gi moi "
+                 "voi X khong'. Only works for companies on the watchlist; a "
+                 "`not_watched` status means the system NEVER LOOKED, which is NOT the "
+                 "same as nothing having changed."),
+        "args": {"company": "str", "days": "float optional, default 30"},
+    },
     "company_coverage": {
         "desc": ("Check what data the system actually has about a company: years of "
                  "financials, 10-K text chunks, relations extracted from filings, ownership "
@@ -142,6 +178,9 @@ TOOL_FUNCTIONS = {
     "graph_neighbors": tools.graph_neighbors,
     "graph_path": tools.graph_path,
     "company_brief": tools.company_brief,
+    "peer_benchmark": tools.peer_benchmark,
+    "ownership_network": tools.ownership_network,
+    "recent_changes": tools.recent_changes,
     "company_coverage": tools.company_coverage,
 }
 

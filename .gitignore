@@ -9,5 +9,9 @@ data/cache/
 eval_results/
 data/tessdata/
 data/chat.db
+# Danh sach theo doi + anh nen du lieu — trang thai rieng cua tung may, khong phai
+# ma nguon. Dua vao git thi moi lan keo ve se ghi de anh nen cua may khac va sinh ra
+# mot trang canh bao gia.
+data/watch.db
 logs/
 data/refresh_state.json

@@ -238,6 +238,8 @@ code{font-family:var(--mono);font-size:.87em;background:var(--bg-sky);color:var(
 .tag-num{background:rgba(16,185,129,.13);color:var(--mint-ink)}
 .tag-text{background:rgba(14,165,233,.13);color:var(--sky-ink)}
 .tag-graph{background:rgba(139,92,246,.15);color:var(--violet-ink)}
+/* Nhãn cho nhóm câu hỏi mà agent tự chạy nhiều bước, không chỉ tra một con số. */
+.tag-auto{background:rgba(245,158,11,.15);color:var(--amber-ink)}
 
 /* ═══════════════════════════════════════════════ bảng ba tầng */
 

@@ -53,6 +53,7 @@ from rich.console import Console
 from rich.table import Table
 
 from config.settings import settings  # noqa: F401 — chỉnh stdout sang UTF-8 cho Windows
+from src.agent import watch
 from src.obs import freshness, logs
 
 console = Console()
@@ -267,6 +268,31 @@ def main() -> None:
     else:
         console.print("\n[green]Kiểm chất lượng: không có bất thường.[/]")
     logs.log_ingest("quality_check", "ok" if not issues else "warn", issues=issues)
+
+    # ---- Theo dõi: dữ liệu vừa đổi những gì với các mã người dùng quan tâm ----
+    #
+    # ⚠️ CHỈ CHẠY KHI --apply. Ở chế độ chạy thử không bước nào động vào dữ liệu, nên
+    # kiểm tra lúc đó chắc chắn ra "không có thay đổi" — một câu trả lời đúng nhưng vô
+    # nghĩa. Tệ hơn: nó sẽ LƯU ảnh nền mới, và lần chạy thật sau đó sẽ so với ảnh nền ấy
+    # thay vì với trạng thái trước khi cập nhật, làm mất đúng những thay đổi cần báo.
+    if args.apply:
+        watched = watch.watchlist()
+        if watched:
+            summary = watch.check_all()
+            console.print(f"\n[cyan]Theo dõi[/] · {summary['checked']} mã · "
+                          f"{summary['changes_total']} thay đổi")
+            for result in summary["results"]:
+                if result["status"] == "baseline" or not result["changes"]:
+                    continue
+                console.print(f"  [bold]{result['ticker']}[/] — {result['company']}")
+                for change in result["changes"]:
+                    color = {"cao": "red", "vua": "yellow"}.get(change["severity"], "dim")
+                    console.print(f"    [{color}]● {change['title']}[/]")
+            for fail in summary["failures"]:
+                console.print(f"  [red]{fail['ticker']} lỗi:[/] {fail['error'][:120]}")
+            logs.log_ingest("watch_check", "ok", checked=summary["checked"],
+                            changes=summary["changes_total"],
+                            failures=len(summary["failures"]))
 
     if not args.apply:
         console.print("\n[yellow]CHẠY THỬ — chưa động vào dữ liệu.[/] "

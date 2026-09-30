@@ -807,6 +807,94 @@ def company_brief(company: str, years: int = 5) -> Dict[str, Any]:
     return result
 
 
+def peer_benchmark(company: str, year: Optional[int] = None) -> Dict[str, Any]:
+    """Đặt một doanh nghiệp cạnh nhóm cùng ngành / cùng đối thủ và xếp hạng từng chỉ tiêu.
+
+    Khác `compare_financials` ở chỗ công cụ kia cần người dùng NÊU SẴN danh sách doanh
+    nghiệp để so. Công cụ này tự tìm nhóm so sánh — theo ngành với doanh nghiệp Việt Nam,
+    theo cạnh COMPETES_WITH (đối thủ doanh nghiệp tự nêu trong hồ sơ) với doanh nghiệp Mỹ.
+
+    ⚠️ ĐỌC `so_doanh_nghiep_co_so_lieu` CỦA TỪNG DÒNG, ĐỪNG DÙNG CHUNG MỘT MẪU SỐ. Mỗi
+    chỉ tiêu có số doanh nghiệp tham gia khác nhau vì không phải ai cũng công bố đủ —
+    ngân hàng không có lợi nhuận gộp. Nói "đứng thứ 3 trong ngành" khi mẫu số của chỉ tiêu
+    ấy chỉ là 4 doanh nghiệp là sai lệch.
+
+    ⚠️ `phan_vi` và `hang` là MÔ TẢ DỮ LIỆU, không phải đánh giá đầu tư.
+    """
+    from src.agent import peers as peers_mod
+
+    return peers_mod.benchmark(company, year=year)
+
+
+def ownership_network(company: str, depth: int = 3,
+                      other: Optional[str] = None) -> Dict[str, Any]:
+    """Mạng lưới sở hữu nhiều tầng — ai đứng sau doanh nghiệp, kể cả qua trung gian.
+
+    Khác `graph_neighbors(relations=["OWNED_BY"])` ở chỗ công cụ kia chỉ đi MỘT bước. Câu
+    hỏi đáng giá lại nằm ở bước thứ hai trở đi: "ngoài cổ đông in trên bản công bố, còn
+    ai nắm doanh nghiệp này qua một pháp nhân khác?"
+
+    ⚠️ KẾT QUẢ CHỨA HAI CON SỐ DỄ GỘP NHẦM. `quyen_loi_kinh_te_pct` là tích các tỷ lệ dọc
+    chuỗi — phần lãi thực nhận. Quyền KIỂM SOÁT nằm ở trường boolean `chuoi_nay_kiem_soat`,
+    và nó KHÔNG suy ra được từ con số kia. Trường `luu_y_bat_buoc` trong kết quả giải
+    thích đầy đủ; agent phải đọc nó trước khi viết câu nào về mức độ chi phối.
+
+    `other` để so hai doanh nghiệp: trả về cổ đông chung thay vì mạng lưới.
+    """
+    from src.agent import ownership as own
+
+    if other:
+        first, second = _resolve(company), _resolve(other)
+        if first["status"] != "ok":
+            return _resolution_failure(company, first)
+        if second["status"] != "ok":
+            return _resolution_failure(other, second)
+        return own.common_holders(first["best"]["ticker"], second["best"]["ticker"])
+    return own.network(company, depth=depth)
+
+
+def recent_changes(company: str, days: float = 30.0) -> Dict[str, Any]:
+    """Dữ liệu của một doanh nghiệp đã đổi những gì gần đây — chỉ với mã đang được theo dõi.
+
+    ⚠️ HAI TRẠNG THÁI "KHÔNG CÓ GÌ" HOÀN TOÀN KHÁC NHAU, KHÔNG ĐƯỢC GỘP.
+
+        not_watched   mã này KHÔNG nằm trong danh sách theo dõi -> hệ thống chưa từng
+                      chụp ảnh nền, nên nó KHÔNG BIẾT có gì đổi hay không
+        ok, rỗng      mã có theo dõi, đã so sánh, và thật sự không có gì đổi
+
+    Trả lời "không có thay đổi nào" cho trường hợp đầu là nói dối: đó là câu trả lời của
+    một hệ thống chưa hề nhìn. Vì vậy `hint` ở nhánh đầu nói thẳng phải làm gì.
+    """
+    from src.agent import watch
+
+    resolved = _resolve(company)
+    if resolved["status"] != "ok":
+        return _resolution_failure(company, resolved)
+
+    ticker = resolved["best"]["ticker"]
+    if not any(w["ticker"] == ticker for w in watch.watchlist()):
+        return {
+            "status": "not_watched", "ticker": ticker, "company": resolved["best"]["name"],
+            "hint": ("Doanh nghiệp này chưa được theo dõi nên hệ thống KHÔNG có ảnh nền "
+                     "để so sánh. TUYỆT ĐỐI không nói rằng không có thay đổi nào — hãy "
+                     "nói rõ là chưa theo dõi, và người dùng có thể thêm vào danh sách "
+                     "theo dõi để từ lần cập nhật sau sẽ có so sánh."),
+        }
+
+    alerts = watch.recent_alerts(ticker=ticker, days=days)
+    return {
+        "status": "ok", "ticker": ticker, "company": resolved["best"]["name"],
+        "days": days, "count": len(alerts),
+        "changes": [{"khi": datetime.fromtimestamp(a["created_at"]).strftime("%Y-%m-%d"),
+                     "muc": a["severity"], "viec": a["title"], "chi_tiet": a["detail"]}
+                    for a in alerts],
+        # Câu này phải đi kèm MỌI lần trả về — xem chú thích đầu `src/agent/watch.py`.
+        "warning": ("Đây là ngày HỆ THỐNG PHÁT HIỆN thay đổi trong kho dữ liệu, KHÔNG "
+                    "phải ngày doanh nghiệp công bố. Một báo cáo công bố từ tháng ba có "
+                    "thể tới hôm nay mới được nạp."),
+    }
+
+
 def graph_neighbors(entity: str, relations: Optional[List[str]] = None, limit: int = 12) -> Dict[str, Any]:
     """Các thực thể nối trực tiếp với một thực thể, kèm câu văn làm bằng chứng.
 

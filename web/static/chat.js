@@ -112,6 +112,12 @@ const SAMPLES = [
   { tag: 'So sánh', cls: 'tag-num', q: 'So sánh chi phí R&D của Apple, Microsoft và Alphabet năm 2025' },
   { tag: 'Văn bản', cls: 'tag-text', q: 'NVIDIA nêu rủi ro gì về kiểm soát xuất khẩu chip sang Trung Quốc?' },
   { tag: 'Bắc cầu', cls: 'tag-graph', q: 'Nếu TSMC gián đoạn sản xuất thì ảnh hưởng tới Microsoft qua những mắt xích nào?' },
+  // Ba câu dưới đây dẫn tới các công cụ agent TỰ CHẠY NHIỀU BƯỚC. Để chúng trong danh
+  // sách gợi ý là cách duy nhất người dùng biết những chức năng ấy tồn tại — không ai tự
+  // nghĩ ra việc hỏi "ai thực sự đứng sau" nếu chưa từng thấy hệ thống trả lời được.
+  { tag: 'Hồ sơ', cls: 'tag-auto', q: 'Phân tích giúp tôi doanh nghiệp Hòa Phát' },
+  { tag: 'Sở hữu', cls: 'tag-auto', q: 'Ai thực sự đứng sau Vinamilk, kể cả qua công ty trung gian?' },
+  { tag: 'Ngành', cls: 'tag-auto', q: 'FPT mạnh hay yếu so với các doanh nghiệp cùng ngành?' },
 ];
 
 function renderSuggestions() {

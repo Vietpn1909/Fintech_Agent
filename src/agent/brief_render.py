@@ -152,16 +152,23 @@ def render(brief: Dict[str, Any], narrate: bool = True) -> str:
         lines.append(f"*Không có số liệu tài chính ({fin.get('status')}).*")
         lines.append("")
 
-    # --- 2. Rủi ro doanh nghiệp tự nêu ---
-    lines.extend(_text_section("2. Rủi ro doanh nghiệp tự nêu", brief.get("risks"),
+    # --- 2. Vị trí trong ngành ---
+    #
+    # Đặt ngay sau bảng số liệu là có chủ ý: một con số đơn độc gần như không đọc được.
+    # "Biên lợi nhuận ròng 11%" chỉ có nghĩa khi biết ngành đạt bao nhiêu — xem chú thích
+    # đầu `src/agent/peers.py`.
+    lines.extend(_peer_section(brief.get("peers"), narrate))
+
+    # --- 3. Rủi ro doanh nghiệp tự nêu ---
+    lines.extend(_text_section("3. Rủi ro doanh nghiệp tự nêu", brief.get("risks"),
                                "Rủi ro doanh nghiệp tự nêu trong báo cáo", narrate))
 
-    # --- 3. Chiến lược ---
-    lines.extend(_text_section("3. Chiến lược và định hướng", brief.get("strategy"),
+    # --- 4. Chiến lược ---
+    lines.extend(_text_section("4. Chiến lược và định hướng", brief.get("strategy"),
                                "Chiến lược và định hướng phát triển", narrate))
 
-    # --- 4. Cơ cấu sở hữu ---
-    lines.append("## 4. Cơ cấu sở hữu")
+    # --- 5. Cơ cấu sở hữu ---
+    lines.append("## 5. Cơ cấu sở hữu")
     lines.append("")
     own = brief.get("ownership") or {}
     if own.get("status") == "ok" and (own.get("holders") or own.get("holdings")):
@@ -194,7 +201,7 @@ def render(brief: Dict[str, Any], narrate: bool = True) -> str:
     # --- 5. Quan hệ kinh doanh ---
     rel = brief.get("relations") or {}
     if rel.get("by_type"):
-        lines.append("## 5. Quan hệ kinh doanh (trích từ hồ sơ)")
+        lines.append("## 6. Quan hệ kinh doanh (trích từ hồ sơ)")
         lines.append("")
         for rtype, items in rel["by_type"].items():
             names = ", ".join(i["neighbor"] for i in items[:6])
@@ -202,7 +209,7 @@ def render(brief: Dict[str, Any], narrate: bool = True) -> str:
         lines.append("")
 
     # --- 6. Điều hệ thống không biết ---
-    lines.append("## 6. Điều hệ thống KHÔNG biết")
+    lines.append("## 7. Điều hệ thống KHÔNG biết")
     lines.append("")
     lines.append("Mục này có mặt vì một hồ sơ trông đầy đủ khiến người đọc mặc định phần "
                  "không được nhắc tới là không đáng kể.")
@@ -213,6 +220,61 @@ def render(brief: Dict[str, Any], narrate: bool = True) -> str:
     lines.append("---")
     lines.append("*Hồ sơ này trình bày dữ kiện, không phải khuyến nghị đầu tư.*")
     return "\n".join(lines)
+
+
+def _peer_section(data: Optional[Dict[str, Any]], narrate: bool) -> List[str]:
+    """Mục 2: doanh nghiệp đứng ở đâu so với nhóm cùng loại.
+
+    ⚠️ KHÔNG SO SÁNH ĐƯỢC LÀ MỘT KẾT QUẢ, KHÔNG PHẢI MỘT LỖI ĐỂ GIẤU.
+
+    Với doanh nghiệp Mỹ ngoài cụm trọng tâm thì hệ thống không có ngành lẫn danh sách đối
+    thủ, nên mục này trống. Bỏ hẳn mục đi khi trống là để người đọc tự hiểu rằng hồ sơ
+    không có phần so sánh vì phần ấy không quan trọng — trong khi sự thật là không so
+    được. Nên mục vẫn hiện, kèm lý do.
+    """
+    lines = ["## 2. Vị trí trong ngành", ""]
+    if not data:
+        lines += ["*Chưa chạy bước so sánh ngành.*", ""]
+        return lines
+
+    if data.get("status") != "ok":
+        reason = data.get("canh_bao") or data.get("ly_do") or ""
+        lines.append(f"*Không dựng được nhóm so sánh.* {reason}")
+        lines.append("")
+        return lines
+
+    lines.append(f"**Nhóm so sánh:** {data['mo_ta_nhom']} · "
+                 f"{data['so_doanh_nghiep_cung_loai']} doanh nghiệp · năm {data['nam']}")
+    lines.append("")
+    lines.append("| Chỉ tiêu | Giá trị | Thứ hạng | Phân vị |")
+    lines.append("|---|---:|---:|---:|")
+    for info in data["xep_hang"].values():
+        value = (f"{info['gia_tri']:,.1f}%" if info["la_ty_le"]
+                 else _fmt_money(info["gia_tri"], data.get("currency", "")))
+        # Mẫu số lấy theo TỪNG chỉ tiêu, không dùng chung — xem chú thích đầu `peers.py`.
+        lines.append(f"| {info['nhan']} | {value} | {info['hang']}/"
+                     f"{info['so_doanh_nghiep_co_so_lieu']} | {info['phan_vi']:g} |")
+    lines.append("")
+    if data.get("canh_bao"):
+        lines.append(f"*{data['canh_bao']}*")
+        lines.append("")
+
+    if narrate:
+        # Chỉ đưa THỨ HẠNG cho mô hình viết lời, không đưa bảng doanh nghiệp cùng nhóm:
+        # nhắc tên một doanh nghiệp khác trong câu văn sẽ kéo theo con số của doanh nghiệp
+        # ấy, và lớp đối chiếu sẽ không tìm thấy nguồn cho nó trong phần này.
+        lines.append(_narrate("Vị trí của doanh nghiệp trong nhóm cùng ngành", {
+            "company": data.get("company"), "nam": data.get("nam"),
+            "nhom": data["mo_ta_nhom"], "so_doanh_nghiep": data["so_doanh_nghiep_cung_loai"],
+            "xep_hang": data["xep_hang"],
+            "huong_dan": ("Mỗi chỉ tiêu có mẫu số riêng (so_doanh_nghiep_co_so_lieu) — "
+                          "dùng đúng mẫu số của chỉ tiêu đó. Mẫu số ấy ĐÃ TÍNH CẢ chính "
+                          "doanh nghiệp đang xét, nên viết 'đứng thứ 3 trong 25 doanh "
+                          "nghiệp', đừng viết 'so với 25 doanh nghiệp khác'. Đây là mô "
+                          "tả dữ liệu, TUYỆT ĐỐI không viết thành lời khuyên đầu tư."),
+        }))
+        lines.append("")
+    return lines
 
 
 def _text_section(title: str, data: Optional[Dict[str, Any]], topic: str,

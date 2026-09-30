@@ -189,9 +189,26 @@ def collect_text(ticker: str, query: str, top_k: int = 4) -> Dict[str, Any]:
     }
 
 
+def collect_peers(ticker: str) -> Dict[str, Any]:
+    """Vị trí của doanh nghiệp trong nhóm cùng loại.
+
+    Nhập muộn (trong thân hàm) để tránh vòng nhập: `peers` nhập từ `tools`, còn `tools`
+    nhập `brief` khi công cụ `company_brief` được gọi.
+    """
+    from src.agent.peers import benchmark
+
+    try:
+        return benchmark(ticker)
+    except Exception as exc:  # noqa: BLE001
+        # Một bước hỏng KHÔNG được làm hỏng cả hồ sơ. Năm bước kia vẫn có giá trị, và
+        # trạng thái lỗi ở đây sẽ hiện ra thành một mục nói rõ lý do chứ không biến mất.
+        return {"status": "loi", "ly_do": str(exc)[:200]}
+
+
 def gaps_from(coverage: Dict[str, Any], financials: Dict[str, Any],
               risks: Dict[str, Any], ownership: Dict[str, Any],
-              relations: Optional[Dict[str, Any]] = None) -> List[str]:
+              relations: Optional[Dict[str, Any]] = None,
+              peers: Optional[Dict[str, Any]] = None) -> List[str]:
     """Những thứ hệ thống KHÔNG có — sinh từ dữ liệu thiếu, không viết tay.
 
     Một hồ sơ trông đầy đủ khiến người đọc mặc định phần không được nhắc là không đáng
@@ -231,6 +248,14 @@ def gaps_from(coverage: Dict[str, Any], financials: Dict[str, Any],
                    "đồ thị — những quan hệ này được trích từ văn bản hồ sơ SEC, nên doanh "
                    "nghiệp không niêm yết tại Mỹ thường không có.")
 
+    if (peers or {}).get("status") != "ok":
+        out.append("Không dựng được nhóm doanh nghiệp cùng loại để so sánh, nên mọi con "
+                   "số ở trên chỉ đứng một mình — không biết chúng là cao hay thấp so "
+                   "với những doanh nghiệp tương tự.")
+    elif peers.get("loai_vi_khac_dong_tien"):
+        out.append(f"{peers['loai_vi_khac_dong_tien']} doanh nghiệp cùng loại bị loại "
+                   "khỏi bảng so sánh vì báo cáo bằng đồng tiền khác.")
+
     out.append("Không có giá cổ phiếu, vốn hóa hay chỉ số định giá — hệ thống chỉ đọc báo "
                "cáo tài chính và văn bản công bố.")
     return out
@@ -250,6 +275,7 @@ def collect(company: str, years: int = DEFAULT_YEARS) -> Dict[str, Any]:
     strategy = collect_text(ticker, "chiến lược phát triển và định hướng")
     ownership = collect_ownership(ticker)
     relations = collect_relations(ticker)
+    peers = collect_peers(ticker)
 
     return {
         "status": "ok",
@@ -261,7 +287,8 @@ def collect(company: str, years: int = DEFAULT_YEARS) -> Dict[str, Any]:
         "strategy": strategy,
         "ownership": ownership,
         "relations": relations,
-        "gaps": gaps_from(coverage, financials, risks, ownership, relations),
+        "peers": peers,
+        "gaps": gaps_from(coverage, financials, risks, ownership, relations, peers),
         "seconds": round(time.time() - started, 1),
-        "tool_calls": 6,
+        "tool_calls": 7,
     }
