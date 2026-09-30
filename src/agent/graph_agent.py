@@ -114,6 +114,18 @@ TOOL_SPECS = {
                  "companies share an investor, NOT that they do business together."),
         "args": {"source": "str", "target": "str"},
     },
+    "company_brief": {
+        # Đặt TRƯỚC company_coverage: câu hỏi mở kiểu "phân tích giúp tôi doanh nghiệp X"
+        # rất hay bị định tuyến nhầm sang lookup_financials rồi chỉ trả về mỗi bảng số.
+        "desc": ("Full analysis brief for ONE company in a single call: multi-year "
+                 "financial trends with growth and margins already computed, the risks "
+                 "and strategy the company states in its own annual report, ownership "
+                 "structure, business relations, and an explicit list of what the system "
+                 "does NOT have. Use this for OPEN questions like 'analyse company X', "
+                 "'tell me about X', 'danh gia doanh nghiep X' — NOT for a single "
+                 "specific figure (use lookup_financials) or one topic (use search_filings)."),
+        "args": {"company": "str", "years": "int optional, default 5"},
+    },
     "company_coverage": {
         "desc": ("Check what data the system actually has about a company: years of "
                  "financials, 10-K text chunks, relations extracted from filings, ownership "
@@ -129,6 +141,7 @@ TOOL_FUNCTIONS = {
     "search_filings": tools.search_filings,
     "graph_neighbors": tools.graph_neighbors,
     "graph_path": tools.graph_path,
+    "company_brief": tools.company_brief,
     "company_coverage": tools.company_coverage,
 }
 

@@ -198,6 +198,16 @@ def lookup_financials(
             "fiscal_year": data.get("fiscal_year"),
             "period_end": data.get("period_end"),
             "accession": data.get("accession"),
+            # ⚠️ ĐỒNG TIỀN PHẢI ĐI KÈM TỪNG NĂM.
+            #
+            # Luật 4b trong ANSWER_PROMPT bảo agent "LUÔN ghi rõ đồng tiền (trường
+            # `currency`)" — nhưng công cụ này chưa bao giờ trả trường đó. Với doanh
+            # nghiệp Việt Nam thì câu mô tả nguồn có nhắc "đơn vị VND" nên agent đoán
+            # được; với TSMC (TWD) và ASML (EUR) thì không có gì cả, và con số đi ra
+            # trần trụi — đúng thứ mà luật 4b được viết ra để chặn.
+            #
+            # Đồ thị có sẵn `currency` cho 100% bản ghi, chỉ là chỗ này không chép sang.
+            "currency": data.get("currency"),
             "derived": data.get("derived", []),
         }
         for m in wanted:
@@ -770,6 +780,31 @@ def _by_ticker_or_name(resolved: Dict[str, Any], limit: int = 3) -> List[Dict]:
             return via_name
 
     return []
+
+
+def company_brief(company: str, years: int = 5) -> Dict[str, Any]:
+    """Hồ sơ phân tích đầy đủ về MỘT doanh nghiệp — sáu bước thu thập trong một lần gọi.
+
+    ⚠️ VÌ SAO CÔNG CỤ NÀY KHÔNG GIỐNG NHỮNG CÔNG CỤ KHÁC.
+
+    Sáu công cụ kia mỗi cái trả lời một câu hỏi. Cái này trả lời câu "doanh nghiệp này
+    thế nào" — một câu mà người dùng hay hỏi nhất nhưng hệ thống lại trả lời tệ nhất, vì
+    khối định tuyến chỉ được gọi tối đa ba công cụ mỗi vòng nên nó tự chọn ba thứ rồi bỏ
+    phần còn lại, im lặng.
+
+    Nó KHÔNG trả về văn bản đã viết sẵn. Nó trả về dữ liệu có cấu trúc của cả sáu mục để
+    khối trả lời tự viết — nếu trả về văn bản thì lớp đối chiếu số sẽ soi một câu văn mà
+    nguồn của nó nằm ở chỗ khác, và mọi con số sẽ bị báo là không có nguồn.
+    """
+    from src.agent.brief import collect
+
+    result = collect(company, years=years)
+    if result.get("status") != "ok":
+        detail = result.get("detail") or {}
+        # Giữ nguyên trạng thái gốc (ambiguous / not_found / backend_unavailable) để agent
+        # phản ứng đúng kiểu, thay vì gộp hết thành "không có dữ liệu".
+        return detail if detail else {"status": result.get("status"), "query": company}
+    return result
 
 
 def graph_neighbors(entity: str, relations: Optional[List[str]] = None, limit: int = 12) -> Dict[str, Any]:

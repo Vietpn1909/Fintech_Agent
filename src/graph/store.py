@@ -534,7 +534,11 @@ class GraphStore:
                    b.name AS neighbor,
                    labels(b)[0] AS neighbor_type,
                    r.evidence AS evidence, r.doc_id AS doc_id,
-                   r.ticker AS ticker, r.confidence AS confidence
+                   r.ticker AS ticker, r.confidence AS confidence,
+                   // Tỷ lệ sở hữu nằm sẵn trên cạnh OWNED_BY nhưng trước đây không được
+                   // trả ra, nên mọi thứ dựng trên nó phải đọc lại từ câu văn bằng chứng.
+                   // Lưu dạng PHÂN SỐ (0.5023 = 50,23%), không phải phần trăm.
+                   r.percent AS percent, r.as_of AS as_of
             ORDER BY coalesce(r.confidence, 0) DESC
             LIMIT $limit
             """,

@@ -258,6 +258,17 @@ def check_answer(answer: str, observations: Any, question: str = "") -> Dict[str
     # hai chỗ, một chỗ nói lãi một chỗ nói lỗ.
     occurrences: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for value, token, start, end in _scan(answer):
+        # ⚠️ PHẦN TRĂM ĐÃ CÓ NHÁNH RIÊNG — nhánh này phải tránh ra.
+        #
+        # `_readings` cố ý trả về MỌI cách hiểu một chuỗi số, nên "96,62985909861554%"
+        # cho cả 96,63 lẫn 9.662.985.909.861.554 (coi dấu phẩy là ngăn nghìn). Cách hiểu
+        # thứ hai vượt ngưỡng một triệu nên rơi vào nhánh này, không khớp gì trong nguồn,
+        # và bị báo là số bịa — trong khi 96,63% có sẵn trong dữ liệu.
+        #
+        # Tìm ra khi dựng hồ sơ phân tích tự động: cả năm con số phần trăm đều bị báo
+        # sai. Nghĩa là MỌI câu trả lời có phần trăm viết dạng thập phân đều dính.
+        if _PERCENT_AFTER.match(answer[end: end + 12]):
+            continue
         has_unit = bool(_MONEY_AFTER.match(answer[end: end + 14]))
         if abs(value) < (MIN_MAGNITUDE_WITH_UNIT if has_unit else MIN_MAGNITUDE):
             continue
