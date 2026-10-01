@@ -233,6 +233,9 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/22_peers.py FPT           # so sanh voi nhom cung nganh
 
 # --- Vận hành ---
+.venv/Scripts/python.exe scripts/23_backup.py --backup     # sao luu Neo4j + Qdrant (~31 giay)
+.venv/Scripts/python.exe scripts/23_backup.py --list       # cac ban dang co
+.venv/Scripts/python.exe scripts/23_backup.py --check      # doi chieu tep voi manifest
 .venv/Scripts/python.exe scripts/18_refresh.py             # chay thu, xem cai gi da cu
 .venv/Scripts/python.exe scripts/18_refresh.py --apply     # cap nhat that
 .venv/Scripts/python.exe scripts/17_show_logs.py --tail 10 # 10 luot gan nhat
@@ -387,6 +390,7 @@ máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của
 | Gộp thực thể | ✅ | 176 node trùng đã gộp; neo theo CIK nên nạp lại không sinh trùng |
 | Agent đầu-cuối | ✅ | **60/60 = 100% độ chính xác số liệu** trên 80 câu (Mỹ + Việt Nam) |
 | Chức năng ngoài hỏi–đáp | ✅ | Hồ sơ tự động · theo dõi & cảnh báo · mạng lưới sở hữu · so sánh ngành |
+| Sao lưu & khôi phục | ✅ | Neo4j + Qdrant · 348 MB/31 giây · **đã kiểm chứng khôi phục 10/10 chỉ tiêu** |
 | Kiểm thử | ✅ | **235 ca** (55 phân giải · 67 Việt Nam · 23 đối chiếu số · 29 guardrail · 61 chức năng mới) |
 | Đa tiền tệ | ✅ | USD, EUR, JPY, TWD, CNY, DKK... có chặn trộn lẫn khi so sánh |
 | Chấm điểm RAGAS | ⏳ | Tùy chọn — thước đo dò số đã đủ mạnh và không cần LLM giám khảo |
@@ -1070,6 +1074,67 @@ schtasks /Create /TN "FinGraph refresh" /SC DAILY /ST 02:00 ^
   /TR "\"D:\FinTech Agent\.venv\Scripts\python.exe\" \"D:\FinTech Agent\scripts\18_refresh.py\" --apply"
 ```
 
+### Sao lưu — thứ duy nhất trong dự án không dựng lại được
+
+Mọi thứ khác đều tái tạo được từ mã nguồn và dữ liệu nguồn. Trừ **hơn tám giờ chạy nhúng
+vector**: 50.214 đoạn báo cáo thường niên tiếng Việt, 23.869 đoạn 10-K, 1.527 đoạn mô tả
+doanh nghiệp.
+
+**Tám giờ là chi phí TẠO LẠI, không phải thời gian sao lưu.** Đo thật trên máy này:
+
+| | Dung lượng | Sao lưu còn | Thời gian |
+|---|---:|---:|---:|
+| Neo4j (`neo4j-admin database dump`) | 879 MB | 72 MB | 6 giây |
+| Qdrant (API snapshot, 3 collection) | 1,08 GB | 276 MB | 4 giây |
+| **Một lần chạy đầy đủ** | **2,0 GB** | **348 MB** | **31 giây** |
+
+Nhầm hai con số này với nhau là lý do người ta trì hoãn việc sao lưu.
+
+#### Hai kho, hai cách, và không được làm giống nhau
+
+* **Qdrant** có API snapshot — chụp được **khi đang chạy**, không gián đoạn gì.
+* **Neo4j bản Community KHÔNG có sao lưu nóng.** Phải dừng container khoảng 20 giây.
+
+Chép thẳng thư mục dữ liệu Neo4j lúc nó đang chạy thì vẫn ra tệp, kích thước trông hợp
+lý, không lỗi nào báo ra — nhưng nếu đúng lúc đó nó đang ghi dở một trang thì bản sao ấy
+hỏng, và chỉ phát hiện vào ngày cần khôi phục. Đúng loại lỗi im lặng mà cả dự án này
+được dựng lên để chặn.
+
+#### Một bản sao lưu chưa từng khôi phục thành công thì chưa phải bản sao lưu
+
+Nó chỉ là một tệp nằm đó. Nên mỗi bản mang theo `manifest.json` ghi **số đếm thật** lúc
+chụp, và quy trình kiểm chứng là khôi phục rồi đếm lại.
+
+Bản đầu tiên (`2026-10-01_0916`) đã được kiểm chứng bằng cách dựng **một cặp container
+tạm trên cổng khác** (7688/6343) rồi khôi phục vào đó — không động gì tới dữ liệu đang
+chạy. Kết quả **10/10 chỉ tiêu khớp tuyệt đối**:
+
+```
+companies_us        6074 -> 6074      chunks_10k          23869 -> 23869
+companies_vn        1532 -> 1532      chunks_vn_profile    1527 ->  1527
+financial_years    59802 -> 59802     chunks_vn_reports   50214 -> 50214
+ownership_edges    10701 -> 10701     latest_filing_date  2026-07-29 -> 2026-07-29
+```
+
+Số đếm khớp vẫn chưa đủ — vector có thể còn đó mà hỏng. Nên bước cuối là **tìm kiếm ngữ
+nghĩa thật** trên bản khôi phục: hỏi *"rủi ro tỷ giá và lãi suất"* trả về đúng đoạn của
+VCB (báo cáo 2024, trang 45) và CTG (2025, trang 171 và 35), điểm 0,85.
+
+#### Hai chi tiết nhỏ nhưng quan trọng
+
+* **Sao lưu chạy SAU các bước nạp** trong `18_refresh.py --apply`, không phải trước. Sao
+  lưu trước thì bản mới nhất luôn thiếu đúng phần dữ liệu vừa tốn công lấy về.
+* **`--restore` bắt gõ lại đúng mốc thời gian**, không phải gõ "y". Gõ "y" là phản xạ;
+  gõ lại một chuỗi ngày giờ thì buộc phải đọc xem mình đang khôi phục bản nào.
+
+#### Điều việc này KHÔNG giải quyết
+
+Bản sao lưu đang nằm **cùng ổ đĩa** với dữ liệu gốc. Nó chống được xóa nhầm, nạp hỏng và
+dữ liệu bị sửa sai — nhưng **không chống được hỏng ổ đĩa**. Muốn chống thì phải chép
+`backups/` sang ổ ngoài hoặc đám mây, và đó là việc chưa tự động hóa.
+
+---
+
 ## Đánh giá: hai thước đo, không phải một
 
 Nếu chỉ báo cáo điểm RAGAS, câu hỏi đầu tiên của hội đồng sẽ là *"giám khảo là model
@@ -1209,6 +1274,7 @@ config/entity_merges.json   Danh sách gộp/xóa node đồ thị — DUYỆT B
 src/chat/store.py           Phiên trò chuyện và lịch sử tin nhắn (SQLite)
 src/obs/logs.py             Nhật ký JSON Lines, nối theo mã vết
 src/obs/freshness.py        Dữ liệu mới tới đâu — đo bằng chính dữ liệu, không tin sổ sách
+src/obs/backup.py           Sao lưu/khôi phục Neo4j + Qdrant, có bước kiểm chứng số đếm
 tests/test_resolver.py      Hồi quy bộ phân giải tên: 16 ca từ chối, 30 ca nhận đúng
 tests/test_vietnam.py       Tầng Việt Nam: nhận đúng, báo nhập nhằng, không lẫn tiền tệ
 tests/test_verify.py        Lớp đối chiếu số: 8 ca phải bắt, 15 ca không được báo nhầm

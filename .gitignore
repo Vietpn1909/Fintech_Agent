@@ -15,3 +15,6 @@ data/chat.db
 data/watch.db
 logs/
 data/refresh_state.json
+
+# Ban sao luu Neo4j/Qdrant — vai tram MB moi ban, khong phai ma nguon.
+backups/

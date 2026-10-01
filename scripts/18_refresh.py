@@ -189,6 +189,10 @@ def main() -> None:
     ap.add_argument("--only", default=None, help="chi mot buoc, vd vn_metrics")
     ap.add_argument("--force", action="store_true", help="chay ca khi chua den han")
     ap.add_argument("--timeout", type=int, default=3600, help="gioi han giay moi buoc")
+    ap.add_argument("--no-backup", action="store_true",
+                    help="bo qua buoc sao luu cuoi (Neo4j se khong bi dung 20 giay)")
+    ap.add_argument("--keep-backups", type=int, default=7,
+                    help="so ban sao luu giu lai (mac dinh 7)")
     args = ap.parse_args()
 
     steps = STEPS
@@ -268,6 +272,32 @@ def main() -> None:
     else:
         console.print("\n[green]Kiểm chất lượng: không có bất thường.[/]")
     logs.log_ingest("quality_check", "ok" if not issues else "warn", issues=issues)
+
+    # ---- Sao lưu: chạy SAU khi mọi bước nạp đã xong ----
+    #
+    # ⚠️ THỨ TỰ Ở ĐÂY LÀ CÓ CHỦ Ý, KHÔNG PHẢI NGẪU NHIÊN.
+    #
+    # Sao lưu TRƯỚC khi nạp thì bản sao mới nhất luôn thiếu đúng phần dữ liệu vừa tốn
+    # công lấy về. Sao lưu SAU thì bản mới nhất là bản đầy đủ nhất — và nếu một bước nạp
+    # làm hỏng dữ liệu, bản sao của lần chạy TRƯỚC vẫn còn nguyên trong vòng xoay.
+    #
+    # Chỉ chạy khi --apply, vì chạy thử thì chẳng có gì mới để sao lưu, mà một bản sao
+    # thừa lại đẩy một bản cũ ra khỏi vòng xoay.
+    if args.apply and not args.no_backup:
+        from src.obs import backup as backup_mod
+        try:
+            manifest = backup_mod.create(keep=args.keep_backups,
+                                         log=lambda m: console.print(f"  [dim]{m}[/]"))
+            console.print(f"\n[green]Đã sao lưu[/] {manifest['stamp']} · "
+                          f"{manifest['total_bytes'] / 1e6:,.0f} MB · "
+                          f"{manifest['seconds']} giây")
+        except Exception as exc:  # noqa: BLE001
+            # Sao lưu hỏng KHÔNG được làm lần cập nhật thành thất bại — dữ liệu đã nạp
+            # xong và vẫn dùng được. Nhưng phải kêu to, vì đây đúng là lúc người dùng
+            # tưởng mình đã được bảo vệ.
+            console.print(f"\n[red]SAO LƯU HỎNG:[/] {str(exc)[:300]}")
+            console.print("[red]Dữ liệu đã cập nhật xong nhưng CHƯA có bản sao lưu mới.[/]")
+            logs.log_ingest("backup", "failed", error=str(exc)[:300])
 
     # ---- Theo dõi: dữ liệu vừa đổi những gì với các mã người dùng quan tâm ----
     #
