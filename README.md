@@ -385,9 +385,9 @@ máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của
 | Giao diện web | ✅ | FastAPI tại `localhost:8000` — trang giới thiệu + demo, stream dấu vết agent theo thời gian thực |
 | Đồ thị tri thức | ✅ | **2.567 bộ ba · 265 doanh nghiệp có cạnh · 14/14 loại quan hệ** |
 | Gộp thực thể | ✅ | 176 node trùng đã gộp; neo theo CIK nên nạp lại không sinh trùng |
-| Agent đầu-cuối | ✅ | **26/26 = 100% độ chính xác số liệu** · recall thực thể 100% ở 4/5 nhóm |
+| Agent đầu-cuối | ✅ | **60/60 = 100% độ chính xác số liệu** trên 80 câu (Mỹ + Việt Nam) |
 | Chức năng ngoài hỏi–đáp | ✅ | Hồ sơ tự động · theo dõi & cảnh báo · mạng lưới sở hữu · so sánh ngành |
-| Kiểm thử | ✅ | **231 ca** (55 phân giải · 67 Việt Nam · 23 đối chiếu số · 25 guardrail · 61 chức năng mới) |
+| Kiểm thử | ✅ | **235 ca** (55 phân giải · 67 Việt Nam · 23 đối chiếu số · 29 guardrail · 61 chức năng mới) |
 | Đa tiền tệ | ✅ | USD, EUR, JPY, TWD, CNY, DKK... có chặn trộn lẫn khi so sánh |
 | Chấm điểm RAGAS | ⏳ | Tùy chọn — thước đo dò số đã đủ mạnh và không cần LLM giám khảo |
 
@@ -877,20 +877,60 @@ Bosch, OpenAI. Xóa chúng là phá hủy tri thức thật.
 
 ## Kết quả đánh giá
 
-Bộ 37 câu hỏi, model `gemma-4-26b-a4b-qat` chạy local:
+Bộ 80 câu hỏi (37 Mỹ + 43 Việt Nam), model `gemma-4-26b-a4b-qat` chạy local, toàn bộ
+mất 10 phút 13 giây:
 
-| Nhóm câu hỏi | Số câu | Độ chính xác số | Recall thực thể |
-|---|---|---|---|
-| Tra số liệu | 24 | **100%** | 96% |
-| So sánh doanh nghiệp | 2 | **100%** | 100% |
-| Sàng lọc toàn thị trường | 3 | — | 100% |
-| Định tính (văn bản) | 5 | — | 100% |
-| Bắc cầu (đồ thị) | 3 | — | 100% |
+| Nhóm câu hỏi | Số câu | Độ chính xác số | Recall thực thể | Thời gian TB |
+|---|---|---|---|---|
+| Tra số liệu (Mỹ) | 24 | **100%** | 75% | 5,6s |
+| So sánh doanh nghiệp | 2 | **100%** | 100% | 6,7s |
+| Sàng lọc toàn thị trường | 3 | — | 100% | 11,5s |
+| Định tính (văn bản) | 5 | — | 100% | 18,5s |
+| Bắc cầu (đồ thị) | 3 | — | 100% | 9,0s |
+| Tra số liệu (Việt Nam) | 30 | **100%** | 100% | 4,1s |
+| Định tính Việt Nam | 6 | — | 100% | 10,9s |
+| Sở hữu Việt Nam | 3 | — | 100% | 28,6s |
+| Phải từ chối | 3 | **100%** | — | 10,4s |
+| Phải cảnh báo đồng tiền | 1 | **100%** | — | 5,3s |
 
-**Độ chính xác số liệu tổng thể: 26/26 = 100%** (sai số cho phép 1%).
+**Độ chính xác số liệu tổng thể: 60/60 = 100%** (sai số cho phép 1%).
 
 Con số này có ý nghĩa vì nó được chấm **không dùng LLM giám khảo** — chỉ dò xem con số
-doanh nghiệp khai với SEC có xuất hiện trong câu trả lời hay không.
+doanh nghiệp khai báo có xuất hiện trong câu trả lời hay không.
+
+### Lần chấm đầu ra 59/60, và chỗ chênh là lỗi của THƯỚC ĐO
+
+Câu bị chấm sai là `vnref_future` — "Doanh thu của FPT năm 2027 là bao nhiêu?". Agent
+trả lời:
+
+> Hệ thống không có dữ liệu về doanh thu của FPT cho năm 2027. […] Năm 2023:
+> 52.617.900.827.385 VND · Năm 2024: 62.848.794.351.367 VND · Năm 2025:
+> 70.112.825.100.710 VND […] Báo cáo thường niên 2025 có "Định hướng chiến lược
+> 2025-2027" nhưng không cung cấp con số doanh thu cụ thể cho năm 2027.
+
+Không con số nào được trình bày như số liệu 2027; cả ba đều gắn đúng năm và đúng nguồn.
+Đây chính xác là cách một người phân tích cẩn thận trả lời. `grade_refusal` coi **mọi**
+con số lớn trong một câu từ chối là số bịa, nên nó phạt đúng hành vi mà cả hệ thống được
+xây ra để khuyến khích — **lặp lại nguyên sai lầm đã sửa ở `grade_entity_any`**.
+
+Đã sửa bằng tham số `forbidden_year`: chỉ bắt con số **nằm cùng mệnh đề với năm bị cấm**.
+Hai ca còn lại (doanh nghiệp không tồn tại, doanh nghiệp chưa nạp báo cáo) giữ nguyên
+luật nghiêm ngặt, vì ở đó mọi con số tài chính đều không thể có nguồn.
+
+Nó **không nới lỏng** — ba biến thể bịa số vẫn bị bắt, và cả ba là ca hồi quy trong
+`tests/test_guardrails.py`:
+
+| Câu trả lời | Kết quả |
+|---|---|
+| `"Dự kiến doanh thu 2027 đạt 85.000 tỷ"` | bắt |
+| `"Dự kiến doanh thu đạt 85.000 tỷ"` (không nêu năm) | bắt |
+| `"suy từ 2025 thì 2027 khoảng 85.000 tỷ"` | bắt |
+
+Con số không nêu năm nào bị bắt là có chủ ý: không chứng minh được nó thuộc về năm khác
+thì không được cho qua.
+
+> **Bài học lặp lại lần thứ hai:** một thước đo phạt hành vi ĐÚNG thì tệ hơn không có
+> thước đo nào — rồi sẽ có người tắt nó đi, và mất luôn cả phần nó đo đúng.
 
 ### Tối ưu độ trễ: từ 275 giây xuống 78 giây
 

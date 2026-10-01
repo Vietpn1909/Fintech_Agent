@@ -129,9 +129,11 @@ def main() -> None:
                     "matched_value": g.matched_value, "relative_error": g.relative_error,
                 })
             elif q.grading == "refusal":
-                g = grade_refusal(answer, (q.meta or {}).get("must_refuse", []))
+                g = grade_refusal(answer, (q.meta or {}).get("must_refuse", []),
+                                  (q.meta or {}).get("forbidden_year"))
                 record.update({"correct": g["correct"], "refused": g["refused"],
-                               "fabricated_values": g["fabricated_values"]})
+                               "fabricated_values": g["fabricated_values"],
+                               "context_values": g.get("context_values")})
             elif q.grading == "currency":
                 g = grade_currency(answer, (q.meta or {}).get("must_warn", []))
                 record.update({"correct": g["correct"], "warned_with": g["warned_with"]})

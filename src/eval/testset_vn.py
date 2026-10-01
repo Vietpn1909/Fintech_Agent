@@ -234,6 +234,11 @@ REFUSAL_CASES = [
         "question": "Doanh thu của FPT năm 2027 là bao nhiêu?",
         "why": "năm tương lai, không thể có số liệu",
         "must_refuse": ["không có", "chưa có", "không tìm thấy", "chưa công bố", "tương lai"],
+        # ⚠️ Ca này KHÁC hai ca kia: doanh nghiệp có thật và có số liệu thật, chỉ năm
+        # 2027 là không có. Nêu doanh thu 2023–2025 kèm đúng năm là hành vi ĐÚNG, không
+        # phải bịa — xem chú thích trong `grader.grade_refusal`. `forbidden_year` nói cho
+        # bộ chấm biết con số nào mới là con số không được phép có.
+        "forbidden_year": 2027,
     },
     {
         "qid": "vnref_fake",
@@ -249,7 +254,8 @@ def generate_refusal() -> List[EvalQuestion]:
         EvalQuestion(
             qid=c["qid"], category="vn_refusal", question=c["question"], grading="refusal",
             ground_truth=f"Phải trả lời là không có dữ liệu ({c['why']}).",
-            meta={"must_refuse": c["must_refuse"], "why": c["why"]},
+            meta={"must_refuse": c["must_refuse"], "why": c["why"],
+                  "forbidden_year": c.get("forbidden_year")},
         )
         for c in REFUSAL_CASES
     ]

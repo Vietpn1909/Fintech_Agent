@@ -243,22 +243,75 @@ def grade_entities(answer: str, expected_entities: List[str]) -> float:
 # án đều thuộc loại này — trả lời trôi chảy về thứ không có dữ liệu.
 
 
-def grade_refusal(answer: str, must_refuse: List[str]) -> Dict[str, Any]:
-    """Câu trả lời ĐÚNG là lời từ chối. Sai là khi nó đưa ra một con số.
+def grade_refusal(answer: str, must_refuse: List[str],
+                  forbidden_year: Optional[int] = None) -> Dict[str, Any]:
+    """Câu trả lời ĐÚNG là lời từ chối. Sai là khi nó đưa ra con số CHO ĐIỀU BỊ CẤM.
 
     Hai điều kiện, phải đạt cả hai:
       * có ít nhất một cụm từ chối ("không có", "chưa có"…)
-      * KHÔNG có con số lớn nào — vì một con số lớn trong câu trả lời cho câu hỏi không
-        có dữ liệu thì chỉ có thể là bịa ra.
+      * không có con số nào được gán cho điều mà câu hỏi đòi hỏi
+
+    ⚠️ VÌ SAO KHÔNG ĐƠN GIẢN LÀ "CÓ SỐ LỚN THÌ SAI".
+
+    Bản đầu làm đúng thế, và nó chấm SAI một câu trả lời hoàn hảo. Hỏi "Doanh thu của
+    FPT năm 2027 là bao nhiêu?", agent đáp:
+
+        "Hiện tại, hệ thống không có dữ liệu về doanh thu của FPT cho năm 2027.
+         Dựa trên dữ liệu có sẵn:  Năm 2023: 52.617.900.827.385 VND
+                                   Năm 2024: 62.848.794.351.367 VND
+                                   Năm 2025: 70.112.825.100.710 VND
+         Báo cáo thường niên 2025 có 'Định hướng chiến lược 2025-2027' nhưng không
+         cung cấp con số doanh thu cụ thể cho năm 2027."
+
+    Không con số nào được trình bày như số liệu 2027. Cả ba đều gắn đúng năm và đúng
+    nguồn. Đây chính xác là cách một người phân tích cẩn thận trả lời: từ chối dự báo,
+    nhưng vẫn đưa nền để người hỏi tự hiểu bối cảnh.
+
+    Chấm câu đó là "bịa số" là lặp lại đúng sai lầm đã sửa ở `grade_entity_any`: một
+    thước đo phạt hành vi ĐÚNG thì tệ hơn không có thước đo nào, vì rồi sẽ có người tắt
+    nó đi và mất luôn phần nó đo đúng.
+
+    ⚠️ NHƯNG KHÔNG ĐƯỢC NỚI THÀNH "CÓ TỪ CHỐI LÀ ĐỦ".
+
+    Nới thế thì câu "Hệ thống chưa có số liệu 2027, dự kiến khoảng 85.000 tỷ" cũng qua —
+    đúng thứ nguy hiểm nhất, vì nó vừa tỏ ra thận trọng vừa bịa. Nên phép kiểm là: con số
+    nằm trong cùng một mệnh đề với năm bị cấm thì bị bắt; nằm cùng một năm KHÁC thì không.
+
+    `forbidden_year=None` giữ nguyên luật nghiêm ngặt cũ, dùng cho hai ca còn lại — doanh
+    nghiệp không tồn tại và doanh nghiệp chưa nạp báo cáo. Ở đó mọi con số tài chính đều
+    không thể có nguồn, nên có số là bịa.
     """
     low = (answer or "").lower()
     refused = any(k.lower() in low for k in must_refuse)
     # Ngưỡng một triệu: dưới đó là năm, số trang, số lượng — không phải số liệu tài chính.
     big = [v for v in extract_values(answer or "") if abs(v) >= 1e6]
+
+    if forbidden_year is None or not big:
+        return {"correct": bool(refused and not big), "refused": refused,
+                "fabricated_values": big[:3]}
+
+    # Cắt theo dòng VÀ theo câu: bảng số liệu hay viết mỗi năm một dòng, còn văn xuôi thì
+    # mỗi năm một câu. Cắt thiếu một kiểu là gộp nhầm hai năm vào một mệnh đề.
+    segments = [seg for line in (answer or "").splitlines()
+                for seg in re.split(r"[.;]\s", line) if seg.strip()]
+
+    fabricated = []
+    for segment in segments:
+        values = [v for v in extract_values(segment) if abs(v) >= 1e6]
+        if not values:
+            continue
+        years = {int(y) for y in re.findall(r"\b((?:19|20)\d{2})\b", segment)}
+        # Không nêu năm nào thì KHÔNG coi là vô can: không chứng minh được con số ấy
+        # thuộc về năm khác, nên phải bắt. Thà bắt nhầm còn hơn bỏ lọt ở chiều này.
+        if forbidden_year in years or not years:
+            fabricated.extend(values)
+
     return {
-        "correct": bool(refused and not big),
+        "correct": bool(refused and not fabricated),
         "refused": refused,
-        "fabricated_values": big[:3],
+        "fabricated_values": fabricated[:3],
+        # Ghi lại để người đọc báo cáo biết câu trả lời CÓ nêu số, chỉ là nêu hợp lệ.
+        "context_values": [v for v in big if v not in fabricated][:3],
     }
 
 

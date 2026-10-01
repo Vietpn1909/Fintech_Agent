@@ -164,15 +164,38 @@ def check_staleness(failures: list) -> int:
 # `grade_refusal` và `grade_currency` quyết định một câu trả lời "từ chối đúng" hay
 # "bịa ra số". Chúng là thước đo, nên bản thân chúng sai thì mọi con số của bộ đánh giá
 # Việt Nam đều vô nghĩa — kể cả những con số đẹp.
+# Mỗi ca: (mô tả, câu trả lời, kết quả mong đợi, năm bị cấm hoặc None).
+# `None` là luật nghiêm ngặt — doanh nghiệp không tồn tại hay chưa nạp báo cáo, mọi con
+# số tài chính đều không thể có nguồn. Có năm là luật theo mệnh đề, xem `grade_refusal`.
 REFUSAL_GRADING = [
     ("từ chối rõ ràng, không kèm số",
-     "Hệ thống không có dữ liệu về doanh nghiệp này.", True),
+     "Hệ thống không có dữ liệu về doanh nghiệp này.", True, None),
     ("từ chối nhưng vẫn kèm một con số lớn — vẫn là bịa",
-     "Hệ thống chưa có dữ liệu, nhưng ước tính khoảng 85.000.000.000.000 VND.", False),
+     "Hệ thống chưa có dữ liệu, nhưng ước tính khoảng 85.000.000.000.000 VND.", False, None),
     ("không từ chối, đưa thẳng số bịa",
-     "Doanh thu năm 2027 của FPT là 85.000.000.000.000 VND.", False),
+     "Doanh thu năm 2027 của FPT là 85.000.000.000.000 VND.", False, None),
     ("từ chối kèm số trang/năm thì KHÔNG tính là bịa",
-     "Không tìm thấy báo cáo thường niên 2027 của doanh nghiệp này.", True),
+     "Không tìm thấy báo cáo thường niên 2027 của doanh nghiệp này.", True, None),
+
+    # ⚠️ HỒI QUY: bốn ca dưới đây sinh ra vì bộ chấm từng phạt một câu trả lời ĐÚNG.
+    #
+    # Hỏi doanh thu FPT năm 2027, agent nói rõ không có số 2027 rồi nêu 2023–2025 kèm
+    # đúng năm và đúng nguồn. Luật cũ thấy ba con số lớn và chấm "bịa". Đó là cách một
+    # người phân tích cẩn thận trả lời, và một thước đo phạt hành vi đúng thì tệ hơn
+    # không có thước đo — cùng sai lầm đã sửa ở `grade_entity_any`.
+    ("từ chối năm tương lai nhưng nêu số các năm KHÁC kèm đúng năm — ĐÚNG",
+     "Hệ thống không có dữ liệu doanh thu FPT năm 2027.\n"
+     "Năm 2023: 52.617.900.827.385 VND\n"
+     "Năm 2024: 62.848.794.351.367 VND\n"
+     "Năm 2025: 70.112.825.100.710 VND", True, 2027),
+    ("từ chối rồi vẫn gán một con số CHO ĐÚNG năm bị cấm — vẫn là bịa",
+     "Hệ thống chưa có số liệu năm 2027. Dự kiến doanh thu 2027 đạt "
+     "85.000.000.000.000 VND.", False, 2027),
+    ("từ chối rồi nêu số KHÔNG gắn năm nào — không chứng minh được là hợp lệ, phải bắt",
+     "Hệ thống chưa có dữ liệu. Dự kiến doanh thu đạt 85.000.000.000.000 VND.",
+     False, 2027),
+    ("số năm khác nằm cùng DÒNG với năm bị cấm thì vẫn phải bắt",
+     "Chưa có số 2027; suy từ 2025 thì 2027 khoảng 85.000.000.000.000 VND.", False, 2027),
 ]
 
 CURRENCY_GRADING = [
@@ -191,8 +214,8 @@ def check_grading(failures: list) -> int:
     print("NHÓM 4 — phép chấm 'phải từ chối' và 'phải cảnh báo đồng tiền'")
     print("=" * 78)
     keys = ["không có", "chưa có", "không tìm thấy"]
-    for why, answer, want in REFUSAL_GRADING:
-        got = grade_refusal(answer, keys)["correct"]
+    for why, answer, want, year in REFUSAL_GRADING:
+        got = grade_refusal(answer, keys, year)["correct"]
         ok = got == want
         print(f"  {'đúng' if ok else 'SAI '}  chấm={got!s:<5} (cần {want}) · {why}")
         if not ok:
