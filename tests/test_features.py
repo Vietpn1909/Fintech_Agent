@@ -357,12 +357,190 @@ def group_5() -> None:
           not direct.get("b_nam_a"), str(direct.get("b_nam_a")))
 
 
+# ======================================================================================
+# NHÓM 6 — Gợi ý đầu tư: vĩ mô và bộ chấm điểm (hàm thuần, không cần dịch vụ)
+# ======================================================================================
+
+def _fake_company(years, sector="Technology", ticker="TEST.VN"):
+    return {"ticker": ticker, "name": "Doanh nghiệp thử", "sector": sector, "years": years}
+
+
+def _year(fy, rev, ni, eq=1000.0, ta=2000.0, tl=1000.0, cash=200.0, op=None, ocf=None):
+    return {"fiscal_year": fy, "revenue": rev, "net_income": ni, "stockholders_equity": eq,
+            "total_assets": ta, "total_liabilities": tl, "cash_and_equivalents": cash,
+            "operating_income": op if op is not None else ni * 1.25,
+            "operating_cash_flow": ocf, "currency": "VND"}
+
+
+def _ctx(macro_ok=True, global_ok=True):
+    return {
+        "sector": "Technology", "by_year": {},
+        "macro": ({"status": "ok", "diem": 60.0} if macro_ok
+                  else {"status": "khong_du_du_lieu", "ly_do": "thử"}),
+        "global": ({"status": "ok", "diem": 55.0} if global_ok
+                   else {"status": "qua_it_doanh_nghiep", "ly_do": "thử"}),
+    }
+
+
+def group_6() -> None:
+    from datetime import date
+    from src.agent import advisor, macro
+
+    print("\n" + "=" * 78)
+    print("NHÓM 6 — Gợi ý đầu tư: vĩ mô và bộ chấm điểm")
+    print("=" * 78)
+
+    today = date(2026, 10, 1)
+
+    # --- Vĩ mô: lãi suất đo bằng ĐIỂM PHẦN TRĂM, không phải phần trăm thay đổi ---
+    obs = [{"date": "2026-09-30", "value": 4.0}, {"date": "2026-03-01", "value": 3.0}]
+    sig = macro.signal("DFF", obs, today=today)
+    check("lãi suất 3% → 4% là tăng 1 điểm phần trăm, KHÔNG phải tăng 33%",
+          sig["status"] == "ok" and abs(sig["thay_doi"] - 1.0) < 1e-9, str(sig))
+
+    obs = [{"date": "2026-09-29", "value": 115.0}, {"date": "2026-03-01", "value": 100.0}]
+    sig = macro.signal("DCOILBRENTEU", obs, today=today)
+    check("giá dầu tăng 15% cho tín hiệu 0,5 (thang 30%)",
+          sig["status"] == "ok" and abs(sig["tin_hieu"] - 0.5) < 1e-9, str(sig))
+
+    obs = [{"date": "2026-09-29", "value": 200.0}, {"date": "2026-03-01", "value": 100.0}]
+    sig = macro.signal("DCOILBRENTEU", obs, today=today)
+    check("cú sốc giá dầu 100% bị KẸP ở tín hiệu 1, không vượt",
+          sig["tin_hieu"] == 1.0, str(sig.get("tin_hieu")))
+
+    obs = [{"date": "2026-06-01", "value": 4.0}, {"date": "2025-12-01", "value": 3.0}]
+    sig = macro.signal("DFF", obs, today=today)
+    check("chuỗi ngày đã quá hạn tuổi bị loại chứ không dùng như số mới",
+          sig["status"] == "qua_cu", str(sig))
+
+    # ⚠️ "Không biết" KHÁC "trung tính": không có key thì KHÔNG được ra 50 điểm.
+    no_key = macro.sector_score("Real Estate", data={"status": "no_key", "series": {}})
+    check("không có API key thì nhóm vĩ mô KHÔNG có điểm (không giả làm 50)",
+          no_key["status"] != "ok" and "diem" not in no_key, str(no_key))
+    stale = macro.sector_score("Real Estate", today=today, data={"status": "ok", "series": {
+        "DFF": [{"date": "2025-01-01", "value": 4.0}],
+        "DGS10": [{"date": "2025-01-01", "value": 4.0}]}})
+    check("mọi chỉ số đều cũ thì nhóm vĩ mô KHÔNG có điểm",
+          stale["status"] != "ok" and "diem" not in stale, str(stale.get("status")))
+
+    rising = {"status": "ok", "series": {
+        "DFF": [{"date": "2026-09-30", "value": 5.0}, {"date": "2026-03-01", "value": 4.0}],
+        "DGS10": [{"date": "2026-09-30", "value": 5.0}, {"date": "2026-03-01", "value": 4.0}]}}
+    re_score = macro.sector_score("Real Estate", data=rising, today=today)
+    check("lãi suất tăng thì bất động sản dưới 50 điểm (bất lợi)",
+          re_score["status"] == "ok" and re_score["diem"] < 50, str(re_score.get("diem")))
+    check("kết quả vĩ mô nói rõ KHÔNG gồm vĩ mô Việt Nam",
+          "KHÔNG gồm" in re_score.get("pham_vi", ""))
+
+    # --- Bộ chấm điểm ---
+    strong = [_year(2021 + i, 1000.0 * 1.2 ** i, 150.0 * 1.25 ** i, eq=800.0 + 100 * i,
+                    ocf=200.0 * 1.25 ** i) for i in range(5)]
+    r = advisor.score_company(_fake_company(strong), _ctx())
+    check("doanh nghiệp tăng trưởng mạnh, lãi đều được 'Nên mua'",
+          r["muc"] == "Nên mua", f"{r['muc']} {r['diem_tong']}")
+
+    # Chốt chặn: điểm cao nhưng năm gần nhất LỖ thì không bao giờ 'Nên mua'
+    losing = strong[:-1] + [_year(2025, 2100.0, -50.0, eq=1200.0, ocf=100.0)]
+    ctx_hot = _ctx()
+    ctx_hot["macro"]["diem"] = 100.0
+    ctx_hot["global"]["diem"] = 100.0
+    r = advisor.score_company(_fake_company(losing), ctx_hot)
+    check("đang lỗ năm gần nhất thì KHÔNG BAO GIỜ được 'Nên mua'",
+          r["muc"] != "Nên mua", f"{r['muc']} {r['diem_tong']}")
+
+    # Nhóm thiếu dữ liệu có trọng số 0, KHÔNG được tính như 50 trung tính
+    r = advisor.score_company(_fake_company(strong), _ctx(macro_ok=False, global_ok=False))
+    check("nhóm thiếu dữ liệu có trọng số thực bằng 0",
+          r["nhom"]["vi_mo"]["trong_so_thuc"] == 0.0
+          and r["nhom"]["nganh_toan_cau"]["trong_so_thuc"] == 0.0)
+    expected = sum(g["diem"] * advisor.WEIGHTS[k] for k, g in r["nhom"].items()
+                   if g["status"] == "ok") / sum(advisor.WEIGHTS[k] for k, g in r["nhom"].items()
+                                                  if g["status"] == "ok")
+    check("điểm tổng là trung bình CHỈ trên các nhóm tính được",
+          abs(r["diem_tong"] - round(expected, 1)) < 0.11, f"{r['diem_tong']} vs {expected}")
+
+    # Quá ít dữ liệu: không xếp mức
+    two_years = strong[-2:]
+    r = advisor.score_company(_fake_company(two_years), _ctx(macro_ok=False, global_ok=False))
+    check("dưới ngưỡng độ phủ thì KHÔNG xếp mức nào", r["muc"] is None and
+          r["status"] == "khong_xep_muc", f"{r['muc']} phủ {r['do_phu_trong_so']}%")
+
+    old = [_year(2016 + i, 1000.0 * 1.2 ** i, 150.0 * 1.25 ** i) for i in range(5)]
+    r = advisor.score_company(_fake_company(old), _ctx())
+    check("số liệu quá cũ thì KHÔNG xếp mức", r["muc"] is None, str(r["ly_do_khong_xep_muc"]))
+
+    # Ngân hàng: nhóm chất lượng lợi nhuận bị loại THEO THIẾT KẾ (đo được VCB −1,16 → 3,30)
+    r = advisor.score_company(_fake_company(strong, sector="Banks"), _ctx())
+    check("ngân hàng không chấm nhóm chất lượng lợi nhuận",
+          "chat_luong_ln" not in r["nhom"], str(list(r["nhom"])))
+    check("nhóm bị loại theo thiết kế KHÔNG làm giảm độ phủ của ngân hàng",
+          r["do_phu_trong_so"] == 100.0, str(r["do_phu_trong_so"]))
+
+    # Ngưỡng mức
+    level = lambda s: next(name for floor, name in advisor.LEVELS if s >= floor)  # noqa: E731
+    check("ngưỡng: 70 là Nên mua, 69,9 là Theo dõi, 44,9 là Tránh",
+          level(70.0) == "Nên mua" and level(69.9) == "Theo dõi" and level(44.9) == "Tránh")
+
+    check("câu cảnh báo chứa đúng ý người dùng yêu cầu",
+          "do AI đưa ra" in advisor.DISCLAIMER and "cân nhắc kỹ" in advisor.DISCLAIMER
+          and "KHÔNG dựa trên giá" in advisor.DISCLAIMER)
+    check("tên ngành tiếng Việt được hiểu", advisor.normalize_sector("ngân hàng") == "Banks"
+          and advisor.normalize_sector("Bất động sản") == "Real Estate"
+          and advisor.normalize_sector("không có ngành này") is None)
+
+
+# ======================================================================================
+# NHÓM 7 — Gợi ý đầu tư chạy thật (cần Neo4j)
+# ======================================================================================
+
+def group_7() -> None:
+    from src.agent import advisor
+
+    print("\n" + "=" * 78)
+    print("NHÓM 7 — Gợi ý đầu tư chạy thật")
+    print("=" * 78)
+    try:
+        one = advisor.assess("FPT")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BỎ QUA — không kết nối được cơ sở dữ liệu: {str(exc)[:80]}")
+        return
+
+    check("FPT được chấm điểm", one.get("status") == "ok", str(one.get("status")))
+    check("kết quả MỘT MÃ luôn mang câu cảnh báo", one.get("canh_bao") == advisor.DISCLAIMER)
+
+    # ⚠️ Cùng một doanh nghiệp, hai chế độ, phải ra CÙNG một điểm. Không thì người dùng
+    # thấy "Nên mua" khi hỏi riêng và "Theo dõi" trong danh sách.
+    many = advisor.suggest("Technology", top=100)
+    in_list = [d for d in many.get("danh_sach", []) if d["ticker"] == "FPT.VN"]
+    check("chế độ một mã và chế độ danh sách cho CÙNG điểm và CÙNG mức",
+          bool(in_list) and in_list[0]["diem_tong"] == one.get("diem_tong")
+          and in_list[0]["muc"] == one.get("muc"),
+          f"một mã {one.get('diem_tong')} {one.get('muc')} / danh sách "
+          f"{in_list[0]['diem_tong'] if in_list else '-'}")
+    check("kết quả DANH SÁCH luôn mang câu cảnh báo", many.get("canh_bao") == advisor.DISCLAIMER)
+
+    us = advisor.assess("NVDA")
+    check("doanh nghiệp Mỹ KHÔNG được xếp mức",
+          us.get("status") == "chi_ho_tro_viet_nam" and not us.get("muc"), str(us.get("status")))
+    check("kể cả khi từ chối vẫn mang câu cảnh báo", us.get("canh_bao") == advisor.DISCLAIMER)
+
+    amb = advisor.assess("ACB")
+    check("mã trùng hai sàn vẫn phải hỏi lại, không tự chọn để chấm điểm",
+          amb.get("status") == "ambiguous", str(amb.get("status")))
+
+    bad = advisor.suggest("ngành không tồn tại")
+    check("ngành không hiểu được thì liệt kê ngành có sẵn thay vì đoán",
+          bad.get("status") == "khong_ro_nganh" and bool(bad.get("cac_nganh")))
+
+
 def main() -> int:
     group_1()
     group_2()
     group_3()
     group_4()
     group_5()
+    group_6()
+    group_7()
 
     print("\n" + "=" * 78)
     if failures:

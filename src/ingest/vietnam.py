@@ -135,7 +135,20 @@ _BALANCE_TITLES: Dict[str, List[str]] = {
 }
 
 _CASHFLOW_TITLES: Dict[str, List[str]] = {
+    # ⚠️ LỖI IM LẶNG ĐÃ SỬA: hai tiêu đề đầu là tiêu đề VCI THẬT SỰ dùng.
+    #
+    # Bản cũ chỉ có "net cash inflows/outflows ..." (không ngoặc). VCI viết có ngoặc đơn
+    # "inflows/(outflows)", còn ngân hàng thì viết gọn "net cash from operating
+    # activities". Khớp chính xác lẫn khớp bắt đầu bằng đều trượt, `_resolve_fields` trả
+    # về rỗng, và dòng tiền của CẢ 1.532 doanh nghiệp Việt Nam chưa bao giờ được nạp — đo
+    # được 0% độ phủ. Không gì báo lỗi: thiếu một chỉ tiêu trông y hệt doanh nghiệp không
+    # công bố chỉ tiêu ấy.
+    #
+    # Chỉ phát hiện ra khi đo độ phủ trước lúc xây bảng điểm đầu tư, vì nhóm "chất lượng
+    # lợi nhuận" cần đúng chỉ tiêu này.
     "operating_cash_flow": [
+        "net cash inflows/(outflows) from operating activities",   # doanh nghiệp thường
+        "net cash from operating activities",                      # ngân hàng
         "net cash inflows/outflows from operating activities",
         "net cash flow from operating activities",
     ],

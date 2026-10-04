@@ -116,6 +116,17 @@ STEPS: List[Dict[str, Any]] = [
         ],
         "watch": ["latest_filing_date", "chunks_10k"],
     },
+    {
+        "name": "us_sectors",
+        # Mã SIC gần như không đổi, nhưng doanh nghiệp Mỹ MỚI thì có. Không có bước này,
+        # doanh nghiệp mới nạp về sẽ không có mã ngành và bị loại khỏi tín hiệu ngành
+        # toàn cầu của chức năng gợi ý đầu tư — âm thầm, không gì báo ra. Chạy lại chỉ lấy
+        # mã còn thiếu nên rẻ.
+        "every_days": 30,
+        "label": "Mã ngành SIC doanh nghiệp Mỹ",
+        "cmds": [["scripts/24_load_us_sectors.py", "--apply"]],
+        "watch": [],
+    },
 ]
 
 STEP_BY_NAME = {s["name"]: s for s in STEPS}

@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "sec_filings"
 
+    # --- FRED (chỉ số vĩ mô cho chức năng gợi ý đầu tư) ---
+    # Để trống thì nhóm vĩ mô bị loại khỏi điểm và gợi ý ghi rõ "chưa xét vĩ mô" — không
+    # được lặng lẽ tính như thể vĩ mô trung tính.
+    fred_api_key: str = ""
+
     # --- Phạm vi dữ liệu ---
     target_tickers: str = "AAPL,MSFT,NVDA,GOOGL"
     filing_types: str = "10-K"

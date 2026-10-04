@@ -807,6 +807,26 @@ def company_brief(company: str, years: int = 5) -> Dict[str, Any]:
     return result
 
 
+def investment_suggestion(company: Optional[str] = None, sector: Optional[str] = None,
+                          top: int = 10) -> Dict[str, Any]:
+    """Gợi ý đầu tư Nên mua / Theo dõi / Tránh cho doanh nghiệp Việt Nam.
+
+    Hai chế độ: `company` cho một doanh nghiệp, `sector` để xếp hạng cả một ngành.
+
+    ⚠️ Mức gợi ý do BỘ CHẤM ĐIỂM trong `src/agent/advisor.py` quyết định — bảy nhóm yếu
+    tố, trọng số và ngưỡng công bố trong kết quả. Agent chỉ được chép lại mức đó, không
+    được tự đặt mức. Câu cảnh báo được khối trả lời tự gắn vào cuối, xem `node_answer`.
+    """
+    from src.agent import advisor
+
+    if sector and not company:
+        return advisor.suggest(sector, top=top)
+    if company:
+        return advisor.assess(company)
+    return {"status": "bad_arguments",
+            "hint": "Cần `company` (một doanh nghiệp) hoặc `sector` (cả một ngành)."}
+
+
 def peer_benchmark(company: str, year: Optional[int] = None) -> Dict[str, Any]:
     """Đặt một doanh nghiệp cạnh nhóm cùng ngành / cùng đối thủ và xếp hạng từng chỉ tiêu.
 

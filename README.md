@@ -231,6 +231,8 @@ curl -L -H "User-Agent: Ten Ban email@cua.ban" -o data/raw/companyfacts.zip \
 .venv/Scripts/python.exe scripts/20_watch.py --check       # du lieu da doi nhung gi
 .venv/Scripts/python.exe scripts/21_ownership.py Vinamilk  # mang luoi so huu nhieu tang
 .venv/Scripts/python.exe scripts/22_peers.py FPT           # so sanh voi nhom cung nganh
+.venv/Scripts/python.exe scripts/24_load_us_sectors.py --apply  # ma nganh SIC cho DN My (~45 phut, 1 lan)
+.venv/Scripts/python.exe scripts/25_suggest.py FPT         # goi y dau tu (can FRED_API_KEY)
 
 # --- Vận hành ---
 .venv/Scripts/python.exe scripts/23_backup.py --backup     # sao luu Neo4j + Qdrant (~31 giay)
@@ -381,7 +383,7 @@ máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của
 | Đồ thị nền | ✅ | **7.772 Company · 59.802 FinancialYear** (6.074 Mỹ + 1.532 Việt Nam) |
 | Vector index | ✅ | **23.869 chunk · 47 doanh nghiệp** + nạp theo yêu cầu (36–45 giây/công ty) |
 | Phân giải tên công ty | ✅ | Khớp theo ranh giới từ, neo vào CIK, chịu được gõ sai |
-| Bộ công cụ agent | ✅ | **11 công cụ**, kiểm thử trên dữ liệu thật, không gọi LLM |
+| Bộ công cụ agent | ✅ | **12 công cụ**, kiểm thử trên dữ liệu thật, không gọi LLM |
 | Sơ đồ trạng thái LangGraph | ✅ | Biên dịch chạy được, có vòng lặp suy xét |
 | Bộ câu hỏi kiểm thử | ✅ | **34 câu** sinh từ dữ liệu thật (23 chấm xác định + 11 RAGAS) |
 | Bộ chấm dò số | ✅ | 12/12 ca kiểm thử, nhận 6 cách viết số khác nhau |
@@ -389,21 +391,21 @@ máy chủ có GPU — sửa `fetch('/api/...')` trong `app.js` thành URL của
 | Đồ thị tri thức | ✅ | **2.567 bộ ba · 265 doanh nghiệp có cạnh · 14/14 loại quan hệ** |
 | Gộp thực thể | ✅ | 176 node trùng đã gộp; neo theo CIK nên nạp lại không sinh trùng |
 | Agent đầu-cuối | ✅ | **60/60 = 100% độ chính xác số liệu** trên 80 câu (Mỹ + Việt Nam) |
-| Chức năng ngoài hỏi–đáp | ✅ | Hồ sơ tự động · theo dõi & cảnh báo · mạng lưới sở hữu · so sánh ngành |
+| Chức năng ngoài hỏi–đáp | ✅ | Hồ sơ tự động · theo dõi & cảnh báo · mạng lưới sở hữu · so sánh ngành · **gợi ý đầu tư** |
 | Sao lưu & khôi phục | ✅ | Neo4j + Qdrant · 348 MB/31 giây · **đã kiểm chứng khôi phục 10/10 chỉ tiêu** |
-| Kiểm thử | ✅ | **235 ca** (55 phân giải · 67 Việt Nam · 23 đối chiếu số · 29 guardrail · 61 chức năng mới) |
+| Kiểm thử | ✅ | **263 ca** (55 phân giải · 67 Việt Nam · 23 đối chiếu số · 30 guardrail · 88 chức năng ngoài hỏi–đáp) |
 | Đa tiền tệ | ✅ | USD, EUR, JPY, TWD, CNY, DKK... có chặn trộn lẫn khi so sánh |
 | Chấm điểm RAGAS | ⏳ | Tùy chọn — thước đo dò số đã đủ mạnh và không cần LLM giám khảo |
 
 ---
 
-## Bốn chức năng vượt ra ngoài hỏi–đáp
+## Năm chức năng vượt ra ngoài hỏi–đáp
 
 Ba tầng dữ liệu và bảy công cụ đầu tiên đều phục vụ MỘT việc: người dùng hỏi, agent trả
-lời. Điều đó đặt toàn bộ gánh nặng lên người dùng — họ phải biết trước cần hỏi gì. Bốn
+lời. Điều đó đặt toàn bộ gánh nặng lên người dùng — họ phải biết trước cần hỏi gì. Năm
 chức năng dưới đây đảo lại: agent tự chạy một chuỗi bước đã định sẵn.
 
-Cả bốn đi theo cùng một nguyên tắc, và nguyên tắc ấy là điều quan trọng nhất cần nhớ:
+Cả năm đi theo cùng một nguyên tắc, và nguyên tắc ấy là điều quan trọng nhất cần nhớ:
 
 > **Mã lệnh quyết định chạy gì và tính mọi con số. LLM chỉ viết lời, và lời đó vẫn phải
 > qua lớp đối chiếu số.**
@@ -508,6 +510,128 @@ Bốn chốt chặn, mỗi chốt chặn một cách cho ra con số sai mà kh�
 * **Dưới 3 doanh nghiệp thì không dựng bảng.** "Đứng thứ 2 trong 3" là câu vô dụng đội lốt
   một con số. Trả về lý do thay vì một bảng trông thuyết phục.
 
+### 5. Gợi ý đầu tư — `scripts/25_suggest.py`
+
+> ⚠️ **Đây là gợi ý do AI đưa ra, cần cân nhắc kỹ trước khi thực hiện theo.** Mức gợi ý
+> **không dựa trên giá cổ phiếu** — một doanh nghiệp tốt vẫn có thể là khoản đầu tư tệ nếu
+> giá đã quá cao.
+
+Ba mức **Nên mua / Theo dõi / Tránh**, chỉ cho doanh nghiệp **niêm yết tại Việt Nam**.
+Doanh nghiệp Mỹ tham gia với vai trò tín hiệu ngành, không được xếp mức riêng. Hai chế độ:
+một doanh nghiệp (*"Có nên mua FPT không?"*) và xếp hạng cả ngành (*"Nên đầu tư vào ngân
+hàng nào?"*).
+
+#### Bảng chấm điểm — công bố, không giấu trong mô hình
+
+| Nhóm | Chỉ tiêu | Trọng số |
+|---|---|---:|
+| Tăng trưởng | CAGR doanh thu, CAGR lợi nhuận (tối đa 5 năm) | 20 |
+| Sinh lời | ROE, biên ròng — kèm **phân vị trong ngành** | 20 |
+| Sức khỏe tài chính | Nợ phải trả/vốn chủ, tiền mặt/tổng tài sản | 15 |
+| Chất lượng lợi nhuận | Dòng tiền kinh doanh/lợi nhuận, lợi nhuận hoạt động/lợi nhuận sau thuế | 10 |
+| Ổn định | Số năm lỗ, hệ số biến động biên lợi nhuận | 10 |
+| **Ngành toàn cầu** | Trung vị doanh nghiệp **Mỹ** cùng ngành: tăng trưởng doanh thu, thay đổi biên | 10 |
+| **Vĩ mô thế giới** | 9 chỉ số **FRED**, quy về ngành qua bảng độ nhạy | 15 |
+
+Ngưỡng: **≥70 Nên mua · 45–70 Theo dõi · <45 Tránh**.
+
+Mã lệnh tính mọi điểm; LLM chỉ chép lại mức và viết lời giải thích. Lý do vẫn như các chức
+năng trước: người đọc không đồng ý với phương pháp thì thấy ngay chỗ để không đồng ý, thay
+vì phải tin một mức do mô hình "cảm thấy".
+
+#### Bốn quyết định thiết kế, mỗi cái chặn một kiểu sai
+
+**"Không biết" không được giả làm "trung tính".** Nhóm thiếu dữ liệu bị **loại** và trọng
+số chia lại cho các nhóm còn lại — không được cho 50 điểm. Tính được dưới 70% tổng trọng
+số thì **không xếp mức nào**. Cho điểm trên một nền thiếu là đoán, và một lời đoán mang
+nhãn "Nên mua" là thứ nguy hiểm nhất hệ thống này có thể sinh ra.
+
+**Ngân hàng và bảo hiểm chấm bằng bảng riêng.** Đo được: dòng tiền kinh doanh / lợi nhuận
+của VCB nhảy từ **−1,16 (2023) lên 3,30 (2025)** — tiền gửi và cho vay đều chảy qua dòng
+tiền kinh doanh, nên tỷ lệ ấy vô nghĩa với ngân hàng. Nợ cao cũng là bản chất ngành. Áp
+chung một bảng thì mọi ngân hàng bị chấm "Tránh".
+
+**Hai chốt chặn cứng:** đang lỗ năm gần nhất hoặc vốn chủ âm thì **không bao giờ "Nên
+mua"**, dù vĩ mô thuận lợi tới đâu. Trên dữ liệu thật, chốt này **chưa kích hoạt lần nào**
+— bảng điểm tự nó đã đủ khắt khe với doanh nghiệp lỗ; chốt chặn là lưới an toàn cho
+trường hợp hai nhóm ngoại cảnh cùng rất cao.
+
+**Câu cảnh báo do mã lệnh chèn, không do mô hình viết.** Luật 6 có dặn mô hình nêu cảnh
+báo, nhưng dự án này đã đo được ở phần mạng lưới sở hữu rằng lời dặn là thứ mô hình có
+thể bỏ qua. Nên `node_answer` tự gắn câu cảnh báo vào cuối hễ lượt đó có gọi công cụ gợi ý.
+
+#### Vĩ mô thế giới — số chính thức, có ngày, và có hạn tuổi
+
+Mô hình local không lên mạng được và kiến thức dừng ở ngày huấn luyện; hỏi nó "lãi suất
+Fed hiện bao nhiêu" thì nó trả lời bằng con số quá khứ, rất tự tin. Nên vĩ mô lấy từ **FRED**:
+
+| Chỉ số | Mã FRED | Đơn vị thay đổi | Hạn tuổi |
+|---|---|---|---:|
+| Lãi suất Fed · Lợi suất TPCP Mỹ 10 năm | `DFF` · `DGS10` | **điểm phần trăm** | 14 ngày |
+| Sức mạnh đồng USD · Dầu Brent | `DTWEXBGS` · `DCOILBRENTEU` | % | 14–21 ngày |
+| CPI Mỹ · PPI sắt thép · Bán lẻ Mỹ | `CPIAUCSL` · `WPU101` · `RSAFS` | % | 100 ngày |
+| Giá đồng · Giá cao su thế giới | `PCOPPUSDM` · `PRUBBUSDM` | % | 130 ngày |
+
+Lãi suất đo bằng **điểm phần trăm**, không phải phần trăm thay đổi: từ 3% lên 4% là "tăng 1
+điểm", tính theo phần trăm thì thành "tăng 33%" và nghe như thảm họa. Chuỗi quá hạn tuổi
+bị **loại** chứ không dùng số của ba tháng trước như tình hình hôm nay.
+
+**Bảng độ nhạy ngành–vĩ mô là giả định của tác giả**, viết rõ trong `SENSITIVITY` của
+`src/agent/macro.py` kèm lý do từng dòng — lãi suất tăng thì bất động sản thiệt, bảo hiểm
+có khi lợi. Không có cách "đúng" khách quan để quy một chỉ số vĩ mô thành điểm ngành, nên
+giả định phải công bố để phản biện được.
+
+**FRED không có số liệu Việt Nam** — đã thử tỷ giá VND/USD và CPI Việt Nam, cả hai "series
+does not exist". Nên đây là vĩ mô **thế giới tác động lên** Việt Nam, và mọi kết quả nói rõ
+điều đó.
+
+#### Doanh nghiệp Mỹ cùng ngành — vì sao liên quan
+
+Ngành ở hai nước chịu chung chu kỳ: giá thép thế giới đi xuống thì Hòa Phát lẫn Nucor
+cùng chịu; khách Mỹ cắt ngân sách công nghệ thì FPT lẫn các hãng IT Mỹ cùng mất đơn.
+Doanh nghiệp Mỹ công bố đầy đủ và nhanh qua SEC, nên tình hình của họ là chỉ dấu sớm.
+
+Cần mã ngành cho doanh nghiệp Mỹ — trước đó chưa có. `scripts/24_load_us_sectors.py` lấy
+**mã SIC chính thức từ SEC**: 5.660/6.074 doanh nghiệp có mã, 0 lỗi. 13 ngành Việt Nam
+được ánh xạ sang khoảng mã SIC trong `SECTOR_SIC`; mỗi ngành dựa trên **84–587 doanh
+nghiệp Mỹ**. Chỉ dùng **tỷ lệ không đơn vị** và **trung vị** — không đặt doanh thu VND cạnh
+doanh thu USD.
+
+#### Kết quả trên toàn bộ dữ liệu Việt Nam
+
+1.532 doanh nghiệp → **767 được xếp mức** (745 bỏ vì doanh thu dưới 500 tỷ đồng — không
+có dữ liệu thanh khoản nên quy mô là chỉ dấu thay thế; 20 bỏ vì thiếu dữ liệu):
+
+| Nên mua | Theo dõi | Tránh |
+|---:|---:|---:|
+| 223 (29%) | 441 (58%) | 103 (13%) |
+
+Độ nhạy của ngưỡng "Nên mua": **≥70 → 29%**, **≥75 → 16%**, **≥80 → 6%**. Toàn bộ 13
+ngành chấm xong trong 1,2 giây.
+
+#### Một lỗi im lặng có sẵn từ trước, lộ ra nhờ ĐO TRƯỚC KHI XÂY
+
+Trước khi viết bảng điểm, đo độ phủ từng chỉ tiêu: **dòng tiền kinh doanh của doanh nghiệp
+Việt Nam = 0%**. Không phải VCI thiếu dữ liệu — VCI viết tiêu đề
+`"Net cash inflows/(outflows) from operating activities"` **có dấu ngoặc đơn**, còn code tìm
+chuỗi **không ngoặc**; ngân hàng thì viết `"Net cash from operating activities"`. Cả hai
+trượt, và thiếu một chỉ tiêu trông y hệt doanh nghiệp không công bố chỉ tiêu ấy — không gì
+báo lỗi. Sửa xong và nạp lại: **0% → 100%**. Chạy chức năng theo dõi ở chế độ thử ngay sau
+đó xác nhận lần nạp lại chỉ **thêm** dòng tiền, không đổi con số cũ nào.
+
+Không đo trước thì nhóm "chất lượng lợi nhuận" vẫn chạy, vẫn ra điểm — chỉ là điểm ấy được
+tính từ một nửa số chỉ tiêu mà không ai biết.
+
+#### Điều gợi ý này KHÔNG xét — và mọi kết quả đều tự liệt kê
+
+* Giá cổ phiếu, vốn hóa, P/E, P/B — hệ thống chưa có dữ liệu giá
+* Vĩ mô trong nước (lãi suất, tỷ giá, lạm phát Việt Nam)
+* Tin tức, sự kiện, kết quả kinh doanh theo quý
+* Khẩu vị rủi ro, khung thời gian và danh mục của người dùng
+* **Tính đúng của khuyến nghị chưa được kiểm chứng** — muốn biết phải backtest (chấm bằng
+  dữ liệu năm trước rồi so với kết quả năm sau). Thứ đã kiểm chứng là **tính nhất quán**
+  (cùng một doanh nghiệp ra cùng điểm dù hỏi riêng hay trong danh sách) và **các chốt chặn**.
+
 ### Dùng thử
 
 ```bash
@@ -520,11 +644,14 @@ Bốn chốt chặn, mỗi chốt chặn một cách cho ra con số sai mà kh�
 .venv/Scripts/python.exe scripts/21_ownership.py FPT --common "FPT Retail"
 .venv/Scripts/python.exe scripts/22_peers.py FPT
 .venv/Scripts/python.exe scripts/22_peers.py "Hoa Phat" --year 2024
+.venv/Scripts/python.exe scripts/25_suggest.py FPT                     # goi y mot ma
+.venv/Scripts/python.exe scripts/25_suggest.py --sector "ngan hang"    # xep hang ca nganh
 ```
 
 Hoặc hỏi thẳng trong khung chat — agent tự chọn công cụ:
 *"Phân tích giúp tôi doanh nghiệp Hòa Phát"* · *"Ai thực sự đứng sau Vinamilk?"* ·
-*"FPT mạnh hay yếu so với ngành?"* · *"Có gì mới với FPT không?"*
+*"FPT mạnh hay yếu so với ngành?"* · *"Có gì mới với FPT không?"* ·
+*"Có nên mua cổ phiếu FPT không?"* · *"Nên đầu tư vào ngân hàng nào?"*
 
 ---
 
@@ -1240,6 +1367,7 @@ src/ingest/
     chunker.py              Hai cách cắt chunk cho hai mục đích
     xbrl.py                 Trích xuất số liệu chính xác + xử lý ba cái bẫy ở trên
     on_demand.py            Phân giải tên công ty + nạp dữ liệu ngay khi cần
+    us_sectors.py           Mã ngành SIC cho doanh nghiệp Mỹ, từ hồ sơ đăng ký SEC
     pipeline.py             Ghép các bước trên thành một đường đi chung
 src/vector/store.py         Qdrant + fastembed (CPU đa nhân, không tranh VRAM)
 src/graph/
@@ -1248,7 +1376,7 @@ src/graph/
     extractor.py            Prompt trích xuất + kiểm tra kết quả
     store.py                Neo4j: nạp dữ liệu và các truy vấn cho agent
 src/agent/
-    tools.py                11 công cụ, Cypher viết sẵn và tham số hóa (không để LLM sinh)
+    tools.py                12 công cụ, Cypher viết sẵn và tham số hóa (không để LLM sinh)
     graph_agent.py          Sơ đồ trạng thái LangGraph: định tuyến -> thực thi -> suy xét
     verify.py               Đối chiếu từng con số trong câu trả lời với dữ liệu nguồn
     brief.py                Hồ sơ tự động: bảy bước thu thập, mã lệnh tính mọi con số
@@ -1256,6 +1384,9 @@ src/agent/
     watch.py                Theo dõi & cảnh báo: ảnh nền, so sánh, sáu loại thay đổi
     ownership.py            Mạng lưới sở hữu nhiều tầng — kinh tế KHÁC kiểm soát
     peers.py                So sánh ngành: tự tìm nhóm, xếp hạng, chặn trộn đồng tiền
+    advisor.py              Gợi ý đầu tư: bảng điểm 7 nhóm, chốt chặn, cảnh báo bắt buộc
+    macro.py                Vĩ mô thế giới từ FRED + bảng độ nhạy ngành (giả định công bố)
+    global_industry.py      Tín hiệu từ doanh nghiệp Mỹ cùng ngành, ánh xạ ngành ↔ SIC
 src/eval/
     testset.py              Sinh câu hỏi từ dữ liệu thật + câu hỏi định tính viết tay
     grader.py               Chấm dò số, xác định, không dùng LLM
