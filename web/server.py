@@ -29,17 +29,21 @@ Chạy:
 from __future__ import annotations
 
 import json
+import queue
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any, Dict, Iterator, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
+from src.chat import store as chat_store
+from src.obs import logs
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -120,18 +124,77 @@ def collect_stats() -> Dict[str, Any]:
     # HAS_FINANCIALS và FILED là cạnh hạ tầng (nối công ty với bản ghi năm / hồ sơ), không
     # phải tri thức trích xuất được. Gộp chúng vào sẽ thổi phồng con số lên hàng chục lần.
     infra = ("HAS_FINANCIALS", "FILED")
-    knowledge_edges = sum(n for t, n in rels.items() if t not in infra)
+
+    # ⚠️ HAI LOẠI CẠNH NÀY KHÔNG ĐƯỢC CỘNG CHUNG.
+    #
+    # `knowledge_edges` là quan hệ mô hình ĐỌC RA từ hồ sơ 10-K — mỗi cạnh tốn một lần gọi
+    # LLM và có tỷ lệ sai. `ownership_edges` là quan hệ sở hữu lấy từ dữ liệu đã có cấu
+    # trúc của VCI — không tốn lần gọi nào và không có chỗ để sai.
+    #
+    # Cộng chung thì con số nhảy từ 2.153 lên gần 19.000 và trang chủ sẽ ngầm khoe rằng
+    # đồ thị trích xuất được lớn gấp chín lần thực tế. Đó đúng là kiểu đếm gộp mà
+    # `companies` vừa phải tách ra để sửa.
+    ownership_edges = rels.get("OWNED_BY", 0)
+    knowledge_edges = sum(
+        n for t, n in rels.items() if t not in infra and t != "OWNED_BY"
+    )
+
+    # ⚠️ TỔNG SỐ NODE Company KHÔNG PHẢI LÀ "SỐ DOANH NGHIỆP NIÊM YẾT TẠI MỸ".
+    #
+    # Nhãn Company đang gộp ba thứ khác hẳn nhau: 6.074 doanh nghiệp đăng ký với SEC (có
+    # CIK), 30 doanh nghiệp niêm yết tại Việt Nam (market='VN', lấy số từ VCI chứ không
+    # phải EDGAR), và 166 tổ chức do bước trích xuất đẻ ra vì có tên trong hồ sơ — Samsung,
+    # Huawei, OpenAI, Azure — vốn không niêm yết tại Mỹ và không có một dòng số liệu nào.
+    #
+    # Trang chủ trước đây in thẳng tổng này kèm chữ "doanh nghiệp niêm yết tại Mỹ", nên
+    # vừa cộng nhầm doanh nghiệp Việt Nam vừa cộng nhầm cả những cái tên chỉ được nhắc tới.
+    # Tách ra ở đây để câu chữ ngoài giao diện nói đúng cái mà nó đang đếm.
+    us = store.run("MATCH (c:Company) WHERE c.cik IS NOT NULL RETURN count(*) AS n")
+    vn = store.run("MATCH (c:Company) WHERE c.market = 'VN' RETURN count(*) AS n")
+
+    # ⚠️ "CÓ ĐỒ THỊ" GIỜ CÓ HAI NGHĨA KHÁC HẲN NHAU, VÀ MỘT CON SỐ KHÔNG NÓI ĐƯỢC CẢ HAI.
+    #
+    #   từ hồ sơ    mô hình đọc 10-K rồi trích quan hệ — cạnh thưa nhưng giàu ngữ nghĩa
+    #               (cạnh tranh với ai, phụ thuộc nhà cung cấp nào, chịu rủi ro gì)
+    #   từ sở hữu   bảng cổ đông VCI — cạnh dày nhưng chỉ nói đúng một điều: ai nắm bao
+    #               nhiêu phần trăm của ai
+    #
+    # Sau khi nạp cổ đông, `tiers.graph` nhảy từ 95 lên 1.619. In thẳng con số đó kèm chữ
+    # "doanh nghiệp có đồ thị" là ngầm khoe rằng đồ thị trích xuất từ hồ sơ đã lớn gấp 17
+    # lần, trong khi nó vẫn đúng 95. Cùng loại đếm gộp mà `companies` phải tách ra.
+    from_filings = store.run(
+        """
+        MATCH (c:Company) WHERE c.ticker IS NOT NULL
+        OPTIONAL MATCH (c)-[r]-() WHERE NOT type(r) IN $infra AND type(r) <> 'OWNED_BY'
+        WITH c, count(r) AS n WHERE n > 0
+        RETURN count(c) AS n
+        """,
+        infra=list(infra),
+    )
+    from_ownership = store.run(
+        "MATCH (c:Company)-[:OWNED_BY]-() RETURN count(DISTINCT c) AS n"
+    )
 
     data = {
         "companies": nodes.get("Company", 0),
+        "companies_us": us[0]["n"] if us else 0,
+        "companies_vn": vn[0]["n"] if vn else 0,
+        # Doanh nghiệp NIÊM YẾT — tức là có số liệu tài chính tra được. Cố ý không dùng
+        # "doanh nghiệp có số liệu" làm nhãn: một phần nhỏ trong vũ trụ SEC nộp hồ sơ mà
+        # không kèm XBRL nên không bóc được năm nào, gọi tên như vậy sẽ hứa hơi quá.
+        "companies_listed": (us[0]["n"] if us else 0) + (vn[0]["n"] if vn else 0),
         "financial_years": nodes.get("FinancialYear", 0),
         "text_chunks": backend()["vectors"].count(),
         "knowledge_edges": knowledge_edges,
-        "relation_types": len([t for t in rels if t not in infra]),
+        "ownership_edges": ownership_edges,
+        "relation_types": len([t for t in rels if t not in infra and t != "OWNED_BY"]),
         "tiers": {
             "metrics": tiers.get("metrics", 0),
             "text": tiers.get("text", 0),
             "graph": tiers.get("graph", 0),
+            # Hai nguồn đồ thị, đếm riêng — xem chú thích ở trên
+            "graph_from_filings": from_filings[0]["n"] if from_filings else 0,
+            "graph_from_ownership": from_ownership[0]["n"] if from_ownership else 0,
         },
         "model": settings.llm_reasoning_model,
     }
@@ -144,6 +207,13 @@ def collect_stats() -> Dict[str, Any]:
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
+    # Phiên trò chuyện. Bỏ trống thì câu hỏi đứng một mình, y như hành vi cũ — các
+    # script gọi thẳng /api/ask-sync không phải sửa gì.
+    session_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class SessionRequest(BaseModel):
+    title: str = Field(default="", max_length=120)
 
 
 @app.get("/api/health")
@@ -177,6 +247,9 @@ def health() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         status["detail"]["llm"] = str(exc)[:200]
 
+    # Số câu hỏi đang chờ hoặc đang chạy. Giữ lại vì chính con số này đã lộ ra lỗi rò
+    # rỉ cổng: nó đứng yên ở 1 trong khi không còn luồng agent nào chạy.
+    status["in_flight"] = _queue_depth["n"]
     status["ready"] = all((status["neo4j"], status["qdrant"], status["llm"]))
     return status
 
@@ -234,51 +307,82 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
 
-def run_agent_stream(question: str) -> Iterator[str]:
-    """Chạy agent và đẩy từng bước xuống trình duyệt ngay khi bước đó xong.
+def run_agent_stream(question: str, session_id: Optional[str] = None) -> Iterator[str]:
+    """Chạy agent ở luồng riêng và đẩy mọi sự kiện xuống trình duyệt qua một hàng đợi.
 
-    LangGraph cho phép `.stream(stream_mode="updates")` — sau mỗi khối nó trả về phần
-    state vừa thay đổi. Các khối ở đây trả về `{**state, ...}` nên mỗi lần cập nhật mang
-    theo TOÀN BỘ dấu vết; ta chỉ phát ra phần đuôi chưa gửi.
+    HAI LÝ DO PHẢI TÁCH LUỒNG
+
+    1. Câu trả lời sinh dần bên trong khối "trả lời", tức là ở SÂU trong lời gọi
+       agent.stream(). Generator đang kẹt trong đó thì không có cơ hội yield, nên không
+       thể đẩy từng mẩu chữ ra ngay được.
+
+    2. ⚠️ QUAN TRỌNG HƠN: GENERATOR KHÔNG PHẢI CHỖ ĐỂ GIỮ TÀI NGUYÊN.
+
+       Bản trước giữ semaphore trong generator và nhả ở `finally`. Nghe thì đúng, nhưng
+       một generator chỉ chạy tiếp khi có người gọi `next()`. Người dùng đóng tab giữa
+       chừng thì Starlette ngừng gọi `next()`, generator nằm yên mãi ở câu `yield` cuối
+       cùng, và `finally` KHÔNG BAO GIỜ chạy.
+
+       Đo thật: ngắt kết nối sau 3 giây rồi theo dõi 70 giây tiếp theo —
+           +2s   gate_free=0  queue=1  threads=['agent-run']
+           +10s  gate_free=0  queue=1  threads=[]      <- agent xong rồi
+           +70s  gate_free=0  queue=1  threads=[]      <- cổng vẫn kẹt
+       Agent đã chạy xong từ lâu mà cổng vẫn bị giữ, nên MỌI câu hỏi sau đó đều xếp hàng
+       vĩnh viễn. Một người đóng tab là cả máy chủ chết.
+
+       Cách sửa: luồng agent tự giữ và tự nhả cổng. Luồng thường luôn chạy hết tới
+       `finally` bất kể phía tiêu thụ còn nghe hay không. Generator ở đây không giữ gì
+       cả — bỏ rơi nó lúc nào cũng an toàn.
 
     Vì sao không viết async: các thư viện bên dưới (neo4j driver, openai client,
     fastembed) đều đồng bộ. Bọc chúng trong `async def` mà không await gì sẽ chặn event
-    loop và làm đứng toàn bộ máy chủ, kể cả trang tĩnh. StreamingResponse của Starlette
-    tự chạy iterator đồng bộ trong threadpool, nên viết đồng bộ là đúng.
+    loop và làm đứng toàn bộ máy chủ, kể cả trang tĩnh.
     """
-    started = time.time()
+    events: "queue.Queue[Optional[tuple]]" = queue.Queue()
 
-    with _waiting:
-        _queue_depth["n"] += 1
-        position = _queue_depth["n"]
-
-    if position > 1:
-        yield _sse({"type": "queued", "position": position - 1})
-
-    acquired = _llm_gate.acquire(timeout=600)
-    try:
-        if not acquired:
-            yield _sse({"type": "error", "message": "Máy chủ đang quá tải, thử lại sau."})
-            return
-
-        yield _sse({"type": "start", "question": question})
-
+    def worker() -> None:
+        started = time.time()
+        acquired = False
+        counted = False
         try:
-            agent = backend()["agent"]
-        except Exception as exc:  # noqa: BLE001
-            yield _sse({
-                "type": "error",
-                "message": f"Không khởi tạo được backend: {str(exc)[:200]}",
-                "hint": "Chạy `docker compose up -d` để bật Neo4j và Qdrant.",
-            })
-            return
+            with _waiting:
+                _queue_depth["n"] += 1
+                position = _queue_depth["n"]
+            counted = True
 
-        sent = 0
-        final: Dict[str, Any] = {}
+            if position > 1:
+                events.put(("queued", position - 1))
 
-        try:
+            acquired = _llm_gate.acquire(timeout=600)
+            if not acquired:
+                events.put(("fatal", "Máy chủ đang quá tải, thử lại sau."))
+                return
+
+            events.put(("start", question))
+
+            try:
+                agent = backend()["agent"]
+            except Exception as exc:  # noqa: BLE001
+                events.put(("fatal", f"Không khởi tạo được backend: {str(exc)[:200]}",
+                            "Chạy `docker compose up -d` để bật Neo4j và Qdrant."))
+                return
+
+            # Lịch sử đọc TRƯỚC khi ghi câu hỏi này vào, nếu không agent sẽ thấy chính
+            # câu đang hỏi nằm trong phần "các lượt trước".
+            trace_id = logs.new_trace_id()
+            history = chat_store.history_for(session_id) if session_id else []
+            if session_id:
+                chat_store.add_message(session_id, "user", question)
+
+            sent = 0
+            final: Dict[str, Any] = {}
             for update in agent.stream(
-                {"question": question, "round": 0, "observations": [], "trace": []},
+                {
+                    "question": question, "round": 0, "observations": [], "trace": [],
+                    "history": history,
+                    "trace_id": trace_id,
+                    "on_token": lambda piece: events.put(("token", piece)),
+                },
                 stream_mode="updates",
             ):
                 for _node, delta in update.items():
@@ -287,44 +391,88 @@ def run_agent_stream(question: str) -> Iterator[str]:
                     final = delta
                     trace = delta.get("trace") or []
                     while sent < len(trace):
-                        yield _sse({"type": "step", "data": _enrich(trace[sent])})
+                        events.put(("step", _enrich(trace[sent])))
                         sent += 1
+
+            answer = final.get("answer") or ""
+            if not answer:
+                events.put(("fatal", "Agent không tạo được câu trả lời.",
+                            "Thường do LLM trả về rỗng khi hết token. Thử hỏi ngắn gọn hơn."))
+                return
+
+            # Gửi lại toàn văn dù đã đẩy từng mẩu: trình duyệt dựng lại Markdown một lần
+            # cuối từ bản đầy đủ, nên không lệ thuộc vào việc ghép các mẩu có chuẩn hay
+            # không. Client cũ chỉ nghe `answer` cũng vẫn chạy đúng.
+            events.put(("answer", answer))
+            events.put(("done", round(time.time() - started, 1), final.get("round", 0)))
+
         except Exception as exc:  # noqa: BLE001
-            message = str(exc)[:300]
+            logs.get("web").exception("web.stream_failed", extra={"trace_id": trace_id})
+            events.put(("error", exc))
+        finally:
+            # Cả ba việc dọn dẹp đều nằm ở đây, trong một luồng thường — nơi `finally`
+            # chắc chắn chạy, khác hẳn generator.
+            # Chỉ ghi khi CÓ nội dung. Agent hỏng giữa chừng thì phiên giữ nguyên câu
+            # hỏi của người dùng và không có câu trả lời rỗng nào chen vào lịch sử —
+            # một câu trả lời rỗng sẽ theo vào ngữ cảnh của mọi lượt sau.
+            logs.log_turn(
+                question,
+                {**final, "seconds": round(time.time() - started, 1),
+                 "rounds": final.get("round", 0),
+                 "number_check": final.get("number_check")},
+                trace_id, session_id=session_id, source="web",
+            )
+            if session_id and (final.get("answer") or "").strip():
+                chat_store.add_message(
+                    session_id, "assistant", final["answer"],
+                    {"seconds": round(time.time() - started, 1),
+                     "rounds": final.get("round", 0),
+                     "number_check": final.get("number_check")},
+                )
+            if acquired:
+                _llm_gate.release()
+            if counted:
+                with _waiting:
+                    _queue_depth["n"] -= 1
+            events.put(None)
+
+    threading.Thread(target=worker, daemon=True, name="agent-run").start()
+
+    while True:
+        item = events.get()
+        if item is None:
+            break
+        kind = item[0]
+
+        if kind == "token":
+            yield _sse({"type": "token", "text": item[1]})
+        elif kind == "step":
+            yield _sse({"type": "step", "data": item[1]})
+        elif kind == "queued":
+            yield _sse({"type": "queued", "position": item[1]})
+        elif kind == "start":
+            yield _sse({"type": "start", "question": item[1]})
+        elif kind == "answer":
+            yield _sse({"type": "answer", "text": item[1]})
+        elif kind == "done":
+            yield _sse({"type": "done", "seconds": item[1], "rounds": item[2]})
+        elif kind == "fatal":
+            yield _sse({"type": "error", "message": item[1],
+                        "hint": item[2] if len(item) > 2 else ""})
+        elif kind == "error":
+            message = str(item[1])[:300]
             low = message.lower()
             hint = ""
             if any(k in low for k in ("connect", "refused", "timeout", "10061")):
                 hint = ("Kiểm tra LM Studio đã bật server chưa (tab Developer → Start "
                         "Server), và Docker đã chạy `docker compose up -d` chưa.")
             yield _sse({"type": "error", "message": message, "hint": hint})
-            return
-
-        answer = final.get("answer") or ""
-        if not answer:
-            yield _sse({
-                "type": "error",
-                "message": "Agent không tạo được câu trả lời.",
-                "hint": "Thường do LLM trả về rỗng khi hết token. Thử hỏi ngắn gọn hơn.",
-            })
-            return
-
-        yield _sse({"type": "answer", "text": answer})
-        yield _sse({
-            "type": "done",
-            "seconds": round(time.time() - started, 1),
-            "rounds": final.get("round", 0),
-        })
-    finally:
-        if acquired:
-            _llm_gate.release()
-        with _waiting:
-            _queue_depth["n"] -= 1
 
 
 @app.post("/api/ask")
 def ask(req: AskRequest) -> StreamingResponse:
     return StreamingResponse(
-        run_agent_stream(req.question.strip()),
+        run_agent_stream(req.question.strip(), req.session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -343,11 +491,56 @@ def ask_sync(req: AskRequest) -> Dict[str, Any]:
 
     with _llm_gate:
         try:
-            result = agent_ask(req.question.strip())
+            history = chat_store.history_for(req.session_id) if req.session_id else []
+            if req.session_id:
+                chat_store.add_message(req.session_id, "user", req.question.strip())
+            result = agent_ask(req.question.strip(), history=history,
+                               session_id=req.session_id, source="api")
+            if req.session_id and (result.get("answer") or "").strip():
+                chat_store.add_message(req.session_id, "assistant", result["answer"],
+                                       {"seconds": result.get("seconds")})
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(503, str(exc)[:300])
     result["trace"] = [_enrich(t) for t in result.get("trace", [])]
     return result
+
+
+# ------------------------------------------------------------------ phiên trò chuyện
+#
+# Lịch sử nằm ở SQLite riêng chứ không ở Neo4j/Qdrant — xem chú thích đầu
+# `src/chat/store.py`. Chưa có đăng nhập: ai mở được trang là thấy được mọi phiên.
+
+
+@app.get("/api/sessions")
+def list_sessions() -> Dict[str, Any]:
+    return {"sessions": chat_store.list_sessions()}
+
+
+@app.post("/api/sessions")
+def create_session(req: SessionRequest) -> Dict[str, Any]:
+    return chat_store.create_session(req.title)
+
+
+@app.get("/api/sessions/{session_id}")
+def read_session(session_id: str) -> Dict[str, Any]:
+    data = chat_store.get_session(session_id)
+    if not data:
+        raise HTTPException(404, "Không có phiên này")
+    return data
+
+
+@app.patch("/api/sessions/{session_id}")
+def rename_session(session_id: str, req: SessionRequest) -> Dict[str, Any]:
+    if not chat_store.rename_session(session_id, req.title):
+        raise HTTPException(404, "Không có phiên này")
+    return {"ok": True, "title": req.title}
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str) -> Dict[str, Any]:
+    if not chat_store.delete_session(session_id):
+        raise HTTPException(404, "Không có phiên này")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ trang tĩnh

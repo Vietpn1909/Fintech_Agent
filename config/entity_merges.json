@@ -1,0 +1,328 @@
+{
+  "_doc": [
+    "Danh sách gộp node đồ thị vào doanh nghiệp SEC — DUYỆT BẰNG TAY, KHÔNG SINH TỰ ĐỘNG.",
+    "",
+    "VÌ SAO KHÔNG ĐỂ MÁY TỰ GỘP",
+    "",
+    "Mô hình trích ra tên doanh nghiệp từ báo cáo, nhưng không gắn được mã CIK. Kết quả:",
+    "181 node Company trong đồ thị không có CIK, nằm tách khỏi vũ trụ 6.255 doanh nghiệp",
+    "SEC. Bộ phân giải tên đề xuất được 27 cặp có thể gộp — nhưng khi đối chiếu với câu",
+    "văn gốc thì 6 cặp SAI HẲN và 2 cặp không đủ chắc:",
+    "",
+    "  Celestial   -> Hain Celestial (thực phẩm hữu cơ)     SAI. Bằng chứng: Marvell mua",
+    "                lại, sản phẩm 'Photonic Fabric' -> đây là Celestial AI.",
+    "  GF          -> New Germany Fund (quỹ đầu tư)         SAI. Bằng chứng: hợp đồng cung",
+    "                ứng wafer với AMD -> đây là GlobalFoundries.",
+    "  HPI         -> John Hancock Preferred Income Fund    SAI. Bằng chứng: nằm trong danh",
+    "                sách 'HPE, HPI, IBM, Lenovo' của Intel -> đây là HP Inc.",
+    "  ESMC        -> Escalon Medical                       SAI. Bằng chứng: 'ESMC, công ty",
+    "                con của chúng tôi ở Đức' trong hồ sơ TSMC.",
+    "  LSI Corp    -> LSI Industries (thiết bị chiếu sáng)  SAI. Bằng chứng: Broadcom mua",
+    "                lại -> đây là LSI Corp ngành bán dẫn.",
+    "  GS Acq...   -> GSR V Acquisition Corp                SAI. Hai SPAC khác nhau.",
+    "  Hewlett-Packard -> HPE                               KHÔNG CHẮC: HP đã tách thành",
+    "                HPE và HP Inc., câu văn gốc không phân biệt được.",
+    "  Brookfield  -> Brookfield Corp                       KHÔNG CHẮC: tập đoàn Brookfield",
+    "                có nhiều pháp nhân niêm yết riêng.",
+    "",
+    "Tức là gộp tự động sẽ làm hỏng khoảng 30% số cặp, và khác với lỗi phân giải tên,",
+    "cái này GHI THẲNG VÀO CƠ SỞ DỮ LIỆU và không hoàn tác được.",
+    "",
+    "Không có luật hình thức nào tách được đúng khỏi sai ở đây: 'IBM -> International",
+    "Business Machines' và 'GF -> New Germany Fund' đều là khớp mã chứng khoán chính xác.",
+    "Khác biệt nằm ở NGỮ CẢNH câu văn, tức là ở việc con người đọc và phán đoán.",
+    "",
+    "CÁCH DÙNG",
+    "  scripts/10_review_graph_entities.py   in ứng viên kèm câu văn gốc để duyệt",
+    "  scripts/11_merge_graph_entities.py    gộp, và CHỈ gộp những gì có trong file này",
+    "",
+    "Mỗi mục dưới đây đã được đối chiếu với câu văn trong báo cáo trước khi đưa vào."
+  ],
+  "merges": [
+    {
+      "node": "Arm Holdings",
+      "ticker": "ARM",
+      "why": "AMD nêu Arm là kiến trúc đối thủ; Arm hợp tác Cadence"
+    },
+    {
+      "node": "Qualcomm Incorporated",
+      "ticker": "QCOM",
+      "why": "NXP liệt kê trong nhóm đối thủ chính"
+    },
+    {
+      "node": "SoftBank Group",
+      "ticker": "SFBQF",
+      "why": "Intel bán cổ phần riêng lẻ cho Nvidia và SoftBank Group"
+    },
+    {
+      "node": "UMC",
+      "ticker": "UMC",
+      "why": "Intel: đối thủ đúc chip cùng TSMC, Samsung, GlobalFoundries"
+    },
+    {
+      "node": "Kioxia Corporation",
+      "ticker": "KXHCF",
+      "why": "SanDisk trả phí dịch vụ sản xuất cho Kioxia"
+    },
+    {
+      "node": "Canon Inc",
+      "ticker": "CAJFF",
+      "why": "HP phụ thuộc Canon cho đầu in laser"
+    },
+    {
+      "node": "IBM",
+      "ticker": "IBM",
+      "why": "trong danh sách Intel bồi thường: HPE, HPI, IBM, Lenovo"
+    },
+    {
+      "node": "Infineon Technologies AG",
+      "ticker": "IFNNF",
+      "why": "liên doanh ESMC cùng TSMC, Bosch"
+    },
+    {
+      "node": "WDC",
+      "ticker": "WDC",
+      "why": "SanDisk tách ra từ Western Digital"
+    },
+    {
+      "node": "Skyworks",
+      "ticker": "SWKS",
+      "why": "Qualcomm nêu trong nhóm đối thủ"
+    },
+    {
+      "node": "Zoom",
+      "ticker": "ZM",
+      "why": "Logitech nêu là đối thủ nền tảng hội họp"
+    },
+    {
+      "node": "Ericsson",
+      "ticker": "ERIC",
+      "why": "Ciena nêu là đối thủ phần mềm tự động hóa mạng"
+    },
+    {
+      "node": "Hitachi, Ltd",
+      "ticker": "HTHIF",
+      "why": "Lam Research nêu là đối thủ chính mảng etch"
+    },
+    {
+      "node": "Screen Holding Co., Ltd",
+      "ticker": "DINRF",
+      "why": "Lam Research nêu là đối thủ mảng wet clean"
+    },
+    {
+      "node": "Lasertec, Inc",
+      "ticker": "LSRCF",
+      "why": "KLA nêu trong nhóm đối thủ"
+    },
+    {
+      "node": "Advantest Corporation",
+      "ticker": "ADTTF",
+      "why": "Teradyne nêu là đối thủ mảng kiểm thử bán dẫn"
+    },
+    {
+      "node": "HPE",
+      "ticker": "HPE",
+      "why": "trong danh sách Intel bồi thường"
+    },
+    {
+      "node": "Cognizant",
+      "ticker": "CTSH",
+      "why": "ServiceNow nêu là nhà tích hợp hệ thống toàn cầu"
+    },
+    {
+      "node": "GE",
+      "ticker": "GE",
+      "why": "GE Vernova dùng thương hiệu GE theo hợp đồng cấp phép"
+    }
+  ],
+  "_doc_aliases": [
+    "BIẾN THỂ TRÙNG — cùng một thực thể bị mô hình trích ra dưới nhiều tên.",
+    "Gộp `from` vào `into`. Cả hai đều là node không có CIK, nên đây chỉ là dọn trùng",
+    "trong nội bộ đồ thị, không đụng tới vũ trụ SEC.",
+    "",
+    "Vài cái tên lộ ra một lỗi của bộ trích xuất: nó cắt tên ngay tại dấu mở ngoặc, sinh",
+    "ra 'Google Cloud Platform (GCP' và 'Microsoft Azure (Azure'. Gộp ở đây chỉ chữa phần",
+    "ngọn; phần gốc nằm trong prompt trích xuất.",
+    "",
+    "MƯỜI MỤC CUỐI SINH RA TỪ MỘT HỆ QUẢ DÂY CHUYỀN, đáng ghi lại:",
+    "",
+    "Khi gộp node đồ thị vào bản ghi SEC, script 11 đổi tên node thành tên đẹp trong đồ thị",
+    "('ARM HOLDINGS PLC /UK' -> 'Arm Holdings'). Nhưng bước nạp của script 04 ghi lại toàn",
+    "bộ triples.jsonl, mà trong đó tên nguồn lại là TÊN CHÍNH THỨC CỦA SEC. Kết quả: lần",
+    "chạy trích xuất kế tiếp dựng ra một node MỚI mang tên SEC, và toàn bộ tri thức vừa",
+    "trích được treo lên node mới đó thay vì node đã gộp.",
+    "",
+    "Đo được: node 'Zoom' (đã gộp, có CIK) chỉ còn 1 cạnh, trong khi 104 cạnh vừa trích",
+    "nằm ở node 'Zoom Communications, Inc' không có CIK.",
+    "",
+    "Đưa mười cặp này vào bảng alias thì việc quy về một mối xảy ra NGAY TẠI BƯỚC NẠP, nên",
+    "nó bền qua mọi lần chạy lại — khác với dọn sau, vốn bị lần nạp kế tiếp xóa sổ."
+  ],
+  "aliases": [
+    {
+      "from": "Anthropic, PBC",
+      "into": "Anthropic",
+      "why": "cùng công ty, PBC là hình thức pháp lý"
+    },
+    {
+      "from": "OpenAI OpCo, LLC",
+      "into": "OpenAI",
+      "why": "OpCo là pháp nhân vận hành của OpenAI"
+    },
+    {
+      "from": "Celestial",
+      "into": "Celestial AI",
+      "why": "tên bị cắt cụt; bằng chứng nói về Photonic Fabric"
+    },
+    {
+      "from": "GF",
+      "into": "Global Foundries",
+      "why": "GF là cách AMD viết tắt GlobalFoundries trong hồ sơ"
+    },
+    {
+      "from": "ESMC",
+      "into": "European Semiconductor Manufacturing Company (ESMC) GmbH",
+      "why": "cùng liên doanh của TSMC ở Đức"
+    },
+    {
+      "from": "ZT Group Int'l, Inc. (ZT Systems",
+      "into": "ZT Systems",
+      "why": "tên bị cắt tại dấu mở ngoặc"
+    },
+    {
+      "from": "Google Cloud Platform (GCP",
+      "into": "Google Cloud",
+      "why": "tên bị cắt tại dấu mở ngoặc"
+    },
+    {
+      "from": "GCP",
+      "into": "Google Cloud",
+      "why": "viết tắt của Google Cloud Platform"
+    },
+    {
+      "from": "Microsoft Azure (Azure",
+      "into": "Azure",
+      "why": "tên bị cắt tại dấu mở ngoặc"
+    },
+    {
+      "from": "Foxconn Hon Hai",
+      "into": "Foxconn Technology Group",
+      "why": "cùng một tập đoàn"
+    },
+    {
+      "from": "Zoom Communications, Inc",
+      "into": "Zoom",
+      "why": "tên chính thức SEC của ZM — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "QUALCOMM INC/DE",
+      "into": "Qualcomm Incorporated",
+      "why": "tên chính thức SEC của QCOM — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "ARM HOLDINGS PLC /UK",
+      "into": "Arm Holdings",
+      "why": "tên chính thức SEC của ARM — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "COGNIZANT TECHNOLOGY SOLUTIONS CORP",
+      "into": "Cognizant",
+      "why": "tên chính thức SEC của CTSH — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "Hewlett Packard Enterprise Company",
+      "into": "HPE",
+      "why": "tên chính thức SEC của HPE — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "SKYWORKS SOLUTIONS, INC",
+      "into": "Skyworks",
+      "why": "tên chính thức SEC của SWKS — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "Western Digital Corporation",
+      "into": "WDC",
+      "why": "tên chính thức SEC của WDC — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "United Microelectronics Corporation",
+      "into": "UMC",
+      "why": "tên chính thức SEC của UMC — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "International Business Machines Corporation",
+      "into": "IBM",
+      "why": "tên chính thức SEC của IBM — cùng doanh nghiệp với node đã gộp"
+    },
+    {
+      "from": "GENERAL ELECTRIC CO",
+      "into": "GE",
+      "why": "tên chính thức SEC của GE — cùng doanh nghiệp với node đã gộp"
+    }
+  ],
+  "_doc_remove": [
+    "NHIỄU — node lọt vào từ những phần của 10-K không nói về quan hệ kinh doanh.",
+    "",
+    "⚠️ CHỈ XÓA NHỮNG GÌ CHẮC CHẮN LÀ NHIỄU. Phần lớn trong 170 node không có CIK là",
+    "DOANH NGHIỆP THẬT, chỉ là không niêm yết ở Mỹ: Samsung Electronics (13 cạnh), Huawei",
+    "(6), Lenovo, MediaTek, SMIC, Tokyo Electron, Bosch, OpenAI... Xóa chúng là phá hủy",
+    "tri thức thật. Danh sách dưới đây chỉ gồm ba loại rõ ràng không phải đối tác kinh",
+    "doanh: tổ chức từ thiện/giáo dục trong mục trách nhiệm cộng đồng, đại lý chuyển",
+    "nhượng cổ phiếu trong câu bìa pháp lý, và pháp nhân trung gian lập ra cho một thương",
+    "vụ."
+  ],
+  "remove": [
+    {
+      "node": "Boys & Girls Clubs of Silicon Valley",
+      "why": "tổ chức từ thiện, mục trách nhiệm cộng đồng"
+    },
+    {
+      "node": "Children's Museum of Phoenix",
+      "why": "bảo tàng, mục trách nhiệm cộng đồng"
+    },
+    {
+      "node": "San Diego Children's Discovery Museum",
+      "why": "bảo tàng, mục trách nhiệm cộng đồng"
+    },
+    {
+      "node": "National Science Natural Museum",
+      "why": "bảo tàng, mục trách nhiệm cộng đồng"
+    },
+    {
+      "node": "FIRST Lego League",
+      "why": "chương trình giáo dục, mục cộng đồng"
+    },
+    {
+      "node": "FIRST Tech Challenge",
+      "why": "chương trình giáo dục, mục cộng đồng"
+    },
+    {
+      "node": "Mad Science",
+      "why": "chương trình giáo dục, mục cộng đồng"
+    },
+    {
+      "node": "Learning in Science",
+      "why": "chương trình giáo dục, mục cộng đồng"
+    },
+    {
+      "node": "Computershare Trust Company, National Association",
+      "why": "đại lý chuyển nhượng cổ phiếu, câu bìa pháp lý"
+    },
+    {
+      "node": "Wells Fargo Bank, National Association",
+      "why": "ngân hàng quản lý tài sản thế chấp, câu bìa pháp lý"
+    },
+    {
+      "node": "Arizona Fab HoldCo Inc",
+      "why": "pháp nhân trung gian lập cho một thương vụ"
+    },
+    {
+      "node": "Arizona Fab LLC",
+      "why": "pháp nhân trung gian lập cho một thương vụ"
+    },
+    {
+      "node": "Foundry JV Holdco LLC",
+      "why": "pháp nhân trung gian lập cho một thương vụ"
+    }
+  ]
+}

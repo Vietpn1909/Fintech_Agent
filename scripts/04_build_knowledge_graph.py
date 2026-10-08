@@ -29,6 +29,7 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, Ti
 from rich.table import Table
 
 from config.settings import PROCESSED_DIR, settings
+from src.graph.curation import apply_curation
 from src.graph.extractor import extract_from_chunk
 from src.graph.selector import score_chunk, select_chunks
 from src.graph.store import GraphStore
@@ -185,10 +186,69 @@ def main() -> None:
         console.print("[yellow]Chưa có bộ ba nào để nạp.[/]")
         return
 
+    # ⚠️ PHẢI ÁP DỤNG BẢNG DỌN TRƯỚC KHI NẠP, KHÔNG PHẢI SAU.
+    #
+    # Bước nạp này ghi lại TOÀN BỘ triples.jsonl, kể cả những dòng đã có từ lần chạy
+    # trước. Nên nếu chỉ dọn đồ thị bằng script 11 rồi sau đó chạy lại script 04, mọi
+    # node vừa xóa sẽ được dựng lại từ file — bao gồm cả tổ chức từ thiện, đại lý chuyển
+    # nhượng cổ phiếu và các biến thể tên trùng.
+    #
+    # Đã xảy ra thật: dọn xong còn 170 node không CIK, chạy lại script 04 với đúng 50
+    # chunk mới thì lên lại 312 node và số cạnh nhảy từ 1.908 lên 3.376.
+    #
+    # Đưa việc dọn vào chính bước nạp thì nó bền, tự động và không phụ thuộc thứ tự chạy.
+    rows, renamed, dropped = apply_curation(rows)
+    if renamed or dropped:
+        console.print(
+            f"[dim]Bảng dọn thực thể: đổi tên {renamed} đầu mút · "
+            f"bỏ {dropped} bộ ba trỏ tới node nhiễu[/]"
+        )
+
     console.print(f"\n[cyan]Nạp {len(rows)} bộ ba vào Neo4j...[/]")
     store = GraphStore()
     store.init_schema()
     store.upsert_relations(rows)
+
+    # Đồng bộ mức phủ NGAY SAU KHI nạp cạnh, vì đến lúc này mới biết doanh nghiệp nào
+    # thực sự có tri thức trong đồ thị. Bỏ sót bước này chính là lỗi đã xảy ra: script 05
+    # ghi chú "script 04 nâng lên graph" nhưng script 04 không hề gọi, nên Zoom có 105 cạnh
+    # mà vẫn mang nhãn 'text' và agent tự khai là mình không có dữ liệu đồ thị về Zoom.
+    upgraded, corrected, stale = store.sync_graph_tier()
+    if corrected:
+        console.print(
+            f"[dim]Mức phủ: hạ {corrected} doanh nghiệp Việt Nam về 'metrics' — "
+            f"không có hồ sơ SEC thì không thể ở mức 'text' hay 'graph'[/]"
+        )
+    console.print(
+        f"[dim]Mức phủ: nâng {upgraded} doanh nghiệp lên 'graph' "
+        f"(suy ra từ cạnh thật, không gán tay)[/]"
+    )
+    if stale:
+        console.print(
+            f"[yellow]Cảnh báo:[/] {stale} doanh nghiệp mang nhãn 'graph' nhưng không còn "
+            f"cạnh tri thức nào — nhiều khả năng bảng dọn đã bỏ hết cạnh của chúng. "
+            f"Kiểm tra config/entity_merges.json trước khi tin vào con số mức phủ."
+        )
+
+    # ⚠️ BƯỚC NÀY CHƯA XONG VIỆC — PHẢI CHẠY TIẾP 09 RỒI 11.
+    #
+    # Bước nạp ở trên ghi lại TOÀN BỘ triples.jsonl, và tên thực thể trong file là tên
+    # thô mà mô hình đọc được. Bảng dọn ở `config/entity_merges.json` xử lý được những
+    # trường hợp đã có người duyệt, nhưng script 09 còn gộp thêm khoảng 114 cặp nữa bằng
+    # so khớp tự động ("Tesla, Inc" với "Tesla, Inc.") — và những cặp đó KHÔNG nằm trong
+    # file cấu hình nào, nên mỗi lần nạp lại chúng lại tách ra.
+    #
+    # Đo thật, nạp lại đúng cùng một file hai lần liên tiếp:
+    #     sau 04 -> 09 -> 11    6.266 node · 2.081 cạnh
+    #     chạy lại 04           6.380 node · 3.276 cạnh
+    #
+    # Không có lỗi nào báo ra, chỉ là số liệu phình lên và tri thức bị chia cho hai node.
+    console.print(
+        "\n[yellow]Chưa xong.[/] Bước nạp vừa dựng lại node theo tên thô, nên phải chạy "
+        "tiếp theo đúng thứ tự:\n"
+        "  [cyan]scripts/09_resolve_entities.py[/]          gộp node bị tách đôi\n"
+        "  [cyan]scripts/11_merge_graph_entities.py --apply[/]  gộp vào bản ghi SEC"
+    )
 
     # --- Báo cáo ---
     rel_counts = Counter(r["relation"] for r in rows)

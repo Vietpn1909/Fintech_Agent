@@ -23,12 +23,14 @@ CẤU TRÚC ĐỒ THỊ
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from neo4j import GraphDatabase
 
 from config.settings import settings
-from src.graph.schema import RELATION_NAMES
+from src.graph.schema import (
+    INFRA_RELATIONS, QUERYABLE_RELATIONS, RELATION_NAMES, STRUCTURED_RELATIONS,
+)
 
 
 class GraphStore:
@@ -66,6 +68,10 @@ class GraphStore:
             "CREATE CONSTRAINT person_name IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS UNIQUE",
             "CREATE CONSTRAINT regulator_name IF NOT EXISTS FOR (r:Regulator) REQUIRE r.name IS UNIQUE",
             "CREATE CONSTRAINT geo_name IF NOT EXISTS FOR (g:Geography) REQUIRE g.name IS UNIQUE",
+            # Chủ sở hữu là tổ chức (quỹ đầu tư, tổng công ty nhà nước, ngân hàng nước
+            # ngoài). Nhãn riêng chứ không dùng Company: họ không niêm yết, không có số
+            # liệu, và đếm họ vào "doanh nghiệp" sẽ thổi phồng con số trên trang chủ.
+            "CREATE CONSTRAINT org_name IF NOT EXISTS FOR (o:Organization) REQUIRE o.name IS UNIQUE",
             "CREATE INDEX company_ticker IF NOT EXISTS FOR (c:Company) ON (c.ticker)",
             "CREATE INDEX finyear_lookup IF NOT EXISTS FOR (fy:FinancialYear) ON (fy.ticker, fy.fiscal_year)",
             # Index cho câu hỏi sàng lọc kiểu "công ty nào doanh thu lớn nhất năm 2024"
@@ -119,6 +125,49 @@ class GraphStore:
             written += len(batch)
         return written
 
+    def upsert_vn_companies(self, companies: List[Dict[str, str]]) -> int:
+        """Doanh nghiệp niêm yết tại Việt Nam.
+
+        ⚠️ PHẢI MERGE THEO `ticker`, TUYỆT ĐỐI KHÔNG DÙNG `upsert_companies`.
+
+        `upsert_companies` MERGE theo `cik` — mã định danh do SEC cấp. Doanh nghiệp Việt
+        Nam không có CIK, và trong Neo4j `MERGE (c:Company {cik: null})` khớp với BẤT KỲ
+        node nào có cik null. Hậu quả: toàn bộ doanh nghiệp Việt Nam dồn vào đúng một
+        node, mỗi lần nạp lại ghi đè lên nhau, và không có lỗi nào báo ra.
+        (Ràng buộc duy nhất trên `cik` cũng không cứu được: Neo4j bỏ qua giá trị null.)
+
+        Mã được gắn hậu tố `.VN` để không đụng mã Mỹ — sàn HOSE có mã "FPT", NYSE cũng
+        có "FPT" của một quỹ đóng khác hẳn.
+        """
+        self.run(
+            """
+            UNWIND $rows AS row
+            MERGE (c:Company {ticker: row.ticker})
+            SET c.market = 'VN',
+                c.exchange = coalesce(row.exchange, 'HOSE'),
+                c.symbol = row.symbol,
+                // Ngành do VCI phân loại. Giữ lại vì khi vũ trụ Việt Nam lên gần 1.600 mã
+                // thì "doanh nghiệp thép nào lãi nhất" mới là câu hỏi trả lời được.
+                c.sector = coalesce(row.sector, c.sector),
+                // Các dạng tên khác để bộ phân giải khớp được "Vinamilk", "Vietcombank",
+                // "Hòa Phát" — những cái tên người dùng thật sự gõ.
+                c.short_en = coalesce(row.short_en, c.short_en),
+                c.name_vi = coalesce(row.name_vi, c.name_vi),
+                c.short_vi = coalesce(row.short_vi, c.short_vi),
+                c.tier = coalesce(c.tier, 'metrics'),
+                // Khác với doanh nghiệp SEC (dùng ON CREATE SET để giữ tên đẹp đã gộp
+                // bằng tay), tên doanh nghiệp Việt Nam luôn ghi đè từ nguồn: VCI là
+                // nguồn duy nhất cho nhóm này và không có bước gộp thủ công nào.
+                //
+                // Cần thiết chứ không chỉ cho gọn: bản đầu lấy tên sai chỗ nên mọi doanh
+                // nghiệp vào đồ thị dưới cái tên là chính mã của nó ("ACB", "BID"). Nếu
+                // giữ ON CREATE SET thì chạy lại cũng không sửa được, phải xóa node đi.
+                c.name = row.name
+            """,
+            rows=companies,
+        )
+        return len(companies)
+
     # Thứ bậc mức phủ. Số càng lớn càng phủ sâu.
     TIER_RANK = {"metrics": 0, "text": 1, "graph": 2}
 
@@ -142,6 +191,196 @@ class GraphStore:
             SET c.tier = $tier
             """,
             tickers=tickers, tier=tier, rank=rank,
+        )
+
+    def upsert_shareholders(self, rows: List[Dict[str, Any]]) -> int:
+        """Cạnh sở hữu (Company)-[:OWNED_BY]->(Person|Organization).
+
+        ⚠️ CHỦ SỞ HỮU KHÔNG ĐƯỢC MANG NHÃN `Company`.
+
+        Phần lớn là quỹ đầu tư và cá nhân — không niêm yết, không có số liệu tài chính,
+        không nằm trong vũ trụ tra cứu. Gắn nhãn Company cho họ sẽ làm mọi con số "bao
+        nhiêu doanh nghiệp" phồng lên hàng nghìn, đúng kiểu đếm nhầm mà `collect_stats`
+        vừa phải tách ra để sửa. Nên: INDIVIDUAL -> :Person, CORPORATE -> :Organization.
+
+        MERGE theo tên vì nguồn không cấp mã định danh nào cho chủ sở hữu. Đây là điểm yếu
+        đã biết: "Norges Bank" và "NORGES BANK" sẽ thành hai node. Chấp nhận được vì tên
+        tiếng Anh của VCI khá nhất quán, và bước gộp thực thể (script 09) xử lý được phần
+        còn lại — nhưng phải nói ra chứ không giấu.
+
+        Cạnh mang theo `percent` và `as_of`: tỷ lệ sở hữu thay đổi liên tục, một con số
+        không kèm ngày công bố là con số không kiểm chứng được.
+        """
+        if not rows:
+            return 0
+
+        # ⚠️ CHỦ SỞ HỮU LÀ DOANH NGHIỆP ĐÃ CÓ TRONG ĐỒ THỊ THÌ PHẢI NỐI VÀO CHÍNH NODE ĐÓ.
+        #
+        # Bản đầu tạo node :Organization cho mọi chủ sở hữu là tổ chức. Kết quả: "FPT
+        # Corporation" tồn tại HAI node — một :Company mã FPT.VN, một :Organization sinh ra
+        # vì FPT đứng tên cổ đông của FPT Retail. Đo được 318 trường hợp trùng như vậy.
+        #
+        # Hậu quả không chỉ là dư node. `neighbors()` khớp theo TÊN, nên nó gộp cả hai node
+        # lại và in ra "FPT Digital Retail nắm 46,54% FPT Corporation" — đọc ngược hoàn
+        # toàn chiều sở hữu. Dữ liệu đúng, hiển thị sai, và không có gì báo lỗi.
+        #
+        # Nối vào node Company có sẵn vừa xóa được node trùng, vừa sinh ra thứ giá trị nhất
+        # của cả bước này: cạnh sở hữu GIỮA HAI DOANH NGHIỆP — tức cấu trúc công ty mẹ/công
+        # ty con, thứ mà tầng số liệu không thể hiện được.
+        #
+        # Khớp CHÍNH XÁC theo tên đã hạ chữ thường, không khớp gần đúng. Khớp gần đúng ở
+        # đây sẽ tái tạo đúng lỗi Acer→Macerich, chỉ khác là trên quan hệ sở hữu.
+        known = {
+            (r["name"] or "").strip().lower(): r["ticker"]
+            for r in self.run(
+                "MATCH (c:Company) WHERE c.name IS NOT NULL AND c.ticker IS NOT NULL "
+                "RETURN c.name AS name, c.ticker AS ticker"
+            )
+        }
+        rows = [
+            {**r, "owner_ticker": known.get((r.get("owner_raw") or r.get("owner") or "").strip().lower())}
+            for r in rows
+        ]
+
+        # Doanh nghiệp không tự sở hữu chính mình. Cạnh tự nối không mang thông tin và làm
+        # hỏng mọi truy vấn đường đi.
+        linked = [r for r in rows if r.get("owner_ticker") and r["owner_ticker"] != r["ticker"]]
+        if linked:
+            self.run(
+                """
+                UNWIND $rows AS row
+                MATCH (c:Company {ticker: row.ticker})
+                MATCH (o:Company {ticker: row.owner_ticker})
+                MERGE (c)-[r:OWNED_BY]->(o)
+                SET r.percent = row.percent,
+                    r.shares = row.shares,
+                    r.position = row.position,
+                    r.as_of = row.as_of,
+                    r.ticker = row.ticker,
+                    r.source = 'VCI',
+                    r.evidence = coalesce(row.owner_raw, row.owner) + ' nắm ' +
+                                 toString(round(row.percent * 1000) / 10.0) + '% ' +
+                                 row.symbol + coalesce(' (công bố ' + row.as_of + ')', ''),
+                    r.confidence = row.percent
+                """,
+                rows=linked,
+            )
+
+        rest = [r for r in rows if not r.get("owner_ticker")]
+        for label in ("Person", "Organization"):
+            batch = [r for r in rest if r.get("owner_label") == label]
+            if not batch:
+                continue
+            self.run(
+                f"""
+                UNWIND $rows AS row
+                MATCH (c:Company {{ticker: row.ticker}})
+                MERGE (o:{label} {{name: row.owner}})
+                  ON CREATE SET o.source = 'VCI', o.kind = row.owner_kind
+                SET o.name_vi = coalesce(row.owner_vi, o.name_vi)
+                MERGE (c)-[r:OWNED_BY]->(o)
+                SET r.percent = row.percent,
+                    r.shares = row.shares,
+                    r.position = row.position,
+                    r.as_of = row.as_of,
+                    r.ticker = row.ticker,
+                    r.source = 'VCI',
+                    // `evidence` để `neighbors()` có gì hiển thị cho người đọc kiểm chứng,
+                    // giống câu văn bằng chứng của cạnh do LLM trích.
+                    // Câu bằng chứng dùng tên GỐC, không phải tên hiển thị đã gắn mã.
+                    // "Trương Gia Bình nắm 6.9% FPT" đọc được; "Trương Gia Bình (FPT) nắm
+                    // 6.9% FPT" thì lặp và khó đọc.
+                    r.evidence = coalesce(row.owner_raw, row.owner) + ' nắm ' +
+                                 toString(round(row.percent * 1000) / 10.0) + '% ' +
+                                 row.symbol + coalesce(' (công bố ' + row.as_of + ')', ''),
+                    // Tỷ lệ sở hữu làm độ tin cậy: `neighbors()` sắp xếp giảm dần theo
+                    // trường này, nên cổ đông lớn hiện trước cổ đông nhỏ.
+                    r.confidence = row.percent
+                """,
+                rows=batch,
+            )
+        return len(rows)
+
+    def sync_graph_tier(self) -> Tuple[int, int, int]:
+        """Đặt mức phủ 'graph' theo ĐÚNG những gì đồ thị đang có. Trả về (nâng, hạ, khai khống).
+
+        ⚠️ Hàm này tồn tại vì mức 'graph' trước đây KHÔNG AI GÁN CẢ.
+
+        Script 05 ghi rõ trong chú thích rằng "script 04 nâng lên graph", nhưng script 04
+        chưa bao giờ gọi `set_tier`. Hậu quả đo được: 95 doanh nghiệp trong vũ trụ thực sự
+        có cạnh tri thức, nhưng chỉ 84 doanh nghiệp mang nhãn 'graph'. Zoom có 105 cạnh mà
+        vẫn bị xếp mức 'text' — nghĩa là agent tự báo mình KHÔNG có dữ liệu đồ thị về Zoom
+        trong khi nó có nhiều nhất. Nói thiếu về năng lực của chính mình cũng là trả lời sai,
+        đúng như cảnh báo trong `set_tier`.
+
+        Vì sao SUY RA thay vì gán tay: gán tay là thứ đã hỏng. Mức phủ phải là hệ quả của
+        dữ liệu, nên chạy lại bao nhiêu lần cũng ra cùng kết quả, và không lệ thuộc vào việc
+        có ai nhớ gọi hàm ở đúng chỗ hay không.
+
+        Chỉ xét node CÓ ticker. Bước trích xuất đẻ ra hàng trăm node như "Samsung
+        Electronics" hay "OpenAI" — chúng có cạnh tri thức nhưng không nằm trong vũ trụ SEC,
+        không có số liệu, nên đếm chúng vào mức phủ là thổi phồng con số.
+
+        MỨC PHỦ CHỈ ĐO HỒ SƠ SEC — KHÔNG ĐO QUAN HỆ SỞ HỮU.
+
+        Thang bậc metrics < text < graph ngầm hứa mức cao chứa mức thấp: 'graph' nghĩa là
+        đã trích quan hệ TỪ văn bản 10-K, nên đương nhiên phải có văn bản. Bản trước đếm cả
+        cạnh OWNED_BY, nên sau khi nạp cổ đông, 1.524 doanh nghiệp Việt Nam lên 'graph' —
+        trong khi chúng không có một đoạn văn bản nào. `company_coverage("FPT")` trả về
+        tier='graph' kèm text_chunks=0: một lời hứa tự mâu thuẫn.
+
+        Nên cạnh có cấu trúc (STRUCTURED_RELATIONS) không tính vào mức phủ, và được báo
+        riêng trong `company_coverage`. Doanh nghiệp KHÔNG có CIK thì không thể có hồ sơ
+        SEC, nên mức phủ của nó chỉ có thể là 'metrics'. Đó là suy luận chắc chắn chứ
+        không phải đoán, nên ở đây được phép hạ cấp — khác với chiều hạ cấp bị cấm ở dưới.
+        """
+        # Hạ về 'metrics' những doanh nghiệp Việt Nam đã lỡ được nâng vì cạnh sở hữu.
+        corrected = self.run(
+            """
+            MATCH (c:Company)
+            WHERE c.market = 'VN' AND c.cik IS NULL
+              AND coalesce(c.tier, 'metrics') <> 'metrics'
+            SET c.tier = 'metrics'
+            RETURN count(c) AS n
+            """
+        )
+
+        upgraded = self.run(
+            """
+            MATCH (c:Company)
+            WHERE c.ticker IS NOT NULL AND c.cik IS NOT NULL
+              AND coalesce(c.tier, 'metrics') <> 'graph'
+            OPTIONAL MATCH (c)-[r]-()
+              WHERE NOT type(r) IN $infra AND NOT type(r) IN $structured
+            WITH c, count(r) AS n
+            WHERE n > 0
+            SET c.tier = 'graph'
+            RETURN count(c) AS n
+            """,
+            infra=INFRA_RELATIONS, structured=STRUCTURED_RELATIONS,
+        )
+
+        # Chiều ngược lại: mang nhãn 'graph' mà không còn cạnh trích từ hồ sơ nào. Xảy ra
+        # khi bảng dọn ở config/entity_merges.json bỏ hết cạnh của một doanh nghiệp. Ở đây
+        # chỉ BÁO chứ không tự hạ cấp: hạ xuống 'text' hay 'metrics' tùy vào việc còn văn
+        # bản trong Qdrant hay không, mà đồ thị không biết điều đó — đoán sai lại tạo ra
+        # đúng cái lỗi báo thiếu năng lực mà hàm này đang đi sửa.
+        stale = self.run(
+            """
+            MATCH (c:Company) WHERE c.tier = 'graph'
+            OPTIONAL MATCH (c)-[r]-()
+              WHERE NOT type(r) IN $infra AND NOT type(r) IN $structured
+            WITH c, count(r) AS n
+            WHERE n = 0
+            RETURN count(c) AS n
+            """,
+            infra=INFRA_RELATIONS, structured=STRUCTURED_RELATIONS,
+        )
+
+        return (
+            upgraded[0]["n"] if upgraded else 0,
+            corrected[0]["n"] if corrected else 0,
+            stale[0]["n"] if stale else 0,
         )
 
     def upsert_filings(self, filings: List[Dict[str, Any]]) -> None:
@@ -255,7 +494,7 @@ class GraphStore:
         """Các thực thể nối trực tiếp với một thực thể, kèm bằng chứng."""
         rel_filter = ""
         if relations:
-            allowed = [r for r in relations if r in RELATION_NAMES]
+            allowed = [r for r in relations if r in QUERYABLE_RELATIONS]
             if allowed:
                 rel_filter = ":" + "|".join(allowed)
         # ⚠️ PHẢI TRẢ VỀ ĐÚNG CHIỀU THẬT CỦA CẠNH.
@@ -267,10 +506,25 @@ class GraphStore:
         #
         # Dùng startNode(r) / endNode(r) để lấy chiều thật, kèm trường `direction` cho
         # biết thực thể đang hỏi đứng ở đầu nào.
+        # ⚠️ PHẢI LOẠI CẠNH HẠ TẦNG, NẾU KHÔNG CÔNG CỤ NÀY VÔ DỤNG.
+        #
+        # Mẫu MATCH ở trên khớp MỌI loại cạnh, kể cả 48.025 cạnh HAS_FINANCIALS nối công
+        # ty với từng năm tài chính. Tệ hơn: `ORDER BY r.confidence DESC` xếp NULL lên
+        # ĐẦU trong Neo4j, mà cạnh hạ tầng thì không có thuộc tính confidence.
+        #
+        # Hậu quả đo được trước khi sửa, với limit=12:
+        #     NVIDIA    -> 12/12 cạnh hạ tầng,  0 quan hệ tri thức
+        #     Microsoft -> 12/12 cạnh hạ tầng,  0 quan hệ tri thức
+        #     Apple     -> 12/12 cạnh hạ tầng,  0 quan hệ tri thức
+        # Công cụ trả về `status: ok` nên agent tin là đã tra xong và kết luận ba doanh
+        # nghiệp này không có quan hệ nào trong đồ thị — sai, và không có lỗi nào báo ra.
+        #
+        # coalesce ở phần sắp xếp để cạnh thiếu confidence không lại nhảy lên đầu lần nữa.
         return self.run(
             f"""
             MATCH (a)-[r{rel_filter}]-(b)
             WHERE toLower(a.name) = toLower($name)
+              AND NOT type(r) IN $infra
             RETURN startNode(r).name AS source,
                    type(r) AS relation,
                    endNode(r).name AS target,
@@ -280,11 +534,15 @@ class GraphStore:
                    b.name AS neighbor,
                    labels(b)[0] AS neighbor_type,
                    r.evidence AS evidence, r.doc_id AS doc_id,
-                   r.ticker AS ticker, r.confidence AS confidence
-            ORDER BY r.confidence DESC
+                   r.ticker AS ticker, r.confidence AS confidence,
+                   // Tỷ lệ sở hữu nằm sẵn trên cạnh OWNED_BY nhưng trước đây không được
+                   // trả ra, nên mọi thứ dựng trên nó phải đọc lại từ câu văn bằng chứng.
+                   // Lưu dạng PHÂN SỐ (0.5023 = 50,23%), không phải phần trăm.
+                   r.percent AS percent, r.as_of AS as_of
+            ORDER BY coalesce(r.confidence, 0) DESC
             LIMIT $limit
             """,
-            name=name, limit=limit,
+            name=name, limit=limit, infra=INFRA_RELATIONS,
         )
 
     def path_between(self, source: str, target: str, max_hops: int = 3) -> List[Dict]:
@@ -351,16 +609,23 @@ class GraphStore:
         needle = (fragment or "").strip().lower()
         word_re = _re.compile(rf"(?<![a-z0-9]){_re.escape(needle)}(?![a-z0-9])")
 
-        def rank(row: Dict) -> tuple:
+        def tier_of(row: Dict) -> int:
             name = (row["name"] or "").lower()
             if name == needle:
-                tier = 0
-            elif word_re.match(name):
-                tier = 1
-            elif word_re.search(name):
-                tier = 2
-            else:
-                tier = 3
-            return (tier, row["type"] != prefer_type, len(name))
+                return 0
+            if word_re.match(name):
+                return 1
+            if word_re.search(name):
+                return 2
+            return 3
 
-        return sorted(rows, key=rank)[:limit]
+        def rank(row: Dict) -> tuple:
+            return (tier_of(row), row["type"] != prefer_type, len(row["name"] or ""))
+
+        # Hạng 3 = chỉ chứa chuỗi, không theo ranh giới từ. Đây đúng là nhánh đã sinh ra
+        # "AMD" -> "Amdocs". Vẫn trả về, nhưng đánh dấu `weak` để phía gọi từ chối dùng
+        # nó làm điểm xuất phát cho truy vấn đồ thị.
+        out = []
+        for row in sorted(rows, key=rank)[:limit]:
+            out.append({**row, "confidence": "weak" if tier_of(row) == 3 else "high"})
+        return out

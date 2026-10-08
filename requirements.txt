@@ -18,6 +18,9 @@ qdrant-client==1.12.2
 
 # --- Embedding: ONNX chạy CPU, không chiếm VRAM của LLM ---
 fastembed>=0.8.0
+# Bóc chữ từ PDF báo cáo thường niên Việt Nam (scripts/15). Chọn pypdfium2 thay vì
+# PyMuPDF vì PyMuPDF là AGPL — bất tiện cho một dự án đưa lên GitHub công khai.
+pypdfium2==5.13.0
 mmh3>=5.3.0
 
 # --- LLM: LM Studio expose API tương thích OpenAI ---
@@ -38,3 +41,15 @@ uvicorn[standard]==0.34.0
 
 # grandalf: vẽ sơ đồ LangGraph ra ASCII khi gỡ lỗi
 grandalf==0.8
+
+# OCR cho báo cáo thường niên bản scan (chỉ DGC trong rổ VN30).
+# Tesseract là chương trình hệ thống, không cài bằng pip:
+#   winget install --id UB-Mannheim.TesseractOCR
+# Gói tiếng Việt tải về data/tessdata/ từ tesseract-ocr/tessdata_best (12 MB) — bản
+# "best" chứ không phải "fast", vì dấu tiếng Việt là chỗ mô hình nhanh sai nhiều nhất,
+# mà dấu sai thì chữ sai nghĩa. Ảnh trang do pypdfium2 dựng (đã có sẵn ở trên).
+
+# Trình duyệt thật cho 7 trang quan hệ cổ đông dựng bằng JavaScript (ACB, GAS, HDB, SHB,
+# SSB, TPB, VIB). Chỉ dùng ở bước 15 khi cần; thêm `--no-browser` để bỏ qua cho nhanh.
+# Sau khi pip install phải tải nhân trình duyệt: python -m playwright install chromium
+playwright==1.63.0

@@ -124,7 +124,7 @@ def _item_pattern(item: str) -> re.Pattern:
        mục bên trong ô bảng; sau khi ta chuyển bảng thành "ô | ô | ô" thì tiêu đề
        không còn nằm ở đầu dòng nữa.
 
-    3. Không dùng  thay cho lookahead, vì "Item 1." và "Item 1A" đều thỏa .
+    3. Không dùng \b thay cho lookahead, vì "Item 1." và "Item 1A" đều thỏa \b.
     """
     return re.compile(
         rf"^[\s|]*item\s*{re.escape(item)}(?![0-9A-Za-z])\s*[\.\:\-–—]?\s*",

@@ -63,6 +63,30 @@ RELATION_TYPES: List[tuple] = [
 ]
 
 RELATION_NAMES: List[str] = [r[0] for r in RELATION_TYPES]
+
+# Quan hệ lấy từ nguồn CÓ CẤU TRÚC — không phải LLM trích ra.
+#
+# ⚠️ VÌ SAO KHÔNG BỎ THẲNG VÀO `RELATION_TYPES`.
+#
+# `RELATION_TYPES` là bộ enum ép vào JSON schema của LLM — mọi thứ nằm trong đó là thứ mô
+# hình ĐƯỢC PHÉP TỰ CHẾ ra khi đọc văn bản. Quan hệ sở hữu thì không được vậy: "ai nắm bao
+# nhiêu phần trăm" là số liệu công bố, không phải điều suy ra từ câu chữ. Cho mô hình quyền
+# sinh ra `OWNED_BY` là mở đường để nó đọc câu "NVIDIA hợp tác với ARM" rồi kết luận NVIDIA
+# sở hữu ARM.
+#
+# Nên chúng nằm riêng: agent TRUY VẤN được, nhưng LLM không SINH được.
+STRUCTURED_RELATIONS: List[str] = ["OWNED_BY"]
+
+# Bộ quan hệ agent được phép lọc khi duyệt đồ thị — gồm cả hai nguồn.
+QUERYABLE_RELATIONS: List[str] = RELATION_NAMES + STRUCTURED_RELATIONS
+
+# Cạnh HẠ TẦNG — nối doanh nghiệp với bản ghi năm tài chính và với hồ sơ đã nộp. Chúng
+# không phải tri thức trích xuất được, và phải bị loại khỏi mọi truy vấn duyệt đồ thị.
+#
+# Vì sao đủ quan trọng để đặt thành hằng số: HAS_FINANCIALS có 48.025 cạnh, nhiều gấp
+# 25 lần toàn bộ tri thức thật cộng lại. Quên loại chúng ra một lần là kết quả bị chúng
+# nhấn chìm hoàn toàn — đã xảy ra thật, xem chú thích trong GraphStore.neighbors.
+INFRA_RELATIONS: List[str] = ["HAS_FINANCIALS", "FILED"]
 RELATION_SPEC: Dict[str, tuple] = {r[0]: (r[1], r[2], r[3]) for r in RELATION_TYPES}
 
 # Ánh xạ các cách diễn đạt LLM hay tự chế về đúng nhãn trong bộ đóng.

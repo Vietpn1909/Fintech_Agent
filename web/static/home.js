@@ -22,11 +22,24 @@ async function loadStats() {
 
     const values = {
       companies: s.companies,
+      // Ba con số tách bạch thay vì một tổng gộp. `companies` là tổng số node Company,
+      // trong đó có cả những tổ chức chỉ ĐƯỢC NHẮC TỚI trong hồ sơ (Samsung, OpenAI,
+      // Azure) — chúng không niêm yết và không có số liệu, nên không được đem ra làm
+      // con số quảng bá năng lực.
+      companies_us: s.companies_us,
+      companies_vn: s.companies_vn,
+      companies_listed: s.companies_listed,
       financial_years: s.financial_years,
       text_chunks: s.text_chunks,
       knowledge_edges: s.knowledge_edges,
       relation_types: s.relation_types,
       tier_graph: s.tiers.graph,
+      // Tách hai nguồn: đồ thị trích từ hồ sơ 10-K (thưa, giàu ngữ nghĩa) và đồ thị
+      // sở hữu lấy từ dữ liệu có cấu trúc (dày, chỉ nói ai nắm bao nhiêu của ai).
+      // Gộp làm một con số là ngầm khoe phần đắt tiền lớn gấp 17 lần thực tế.
+      tier_graph_filings: s.tiers.graph_from_filings,
+      tier_graph_ownership: s.tiers.graph_from_ownership,
+      ownership_edges: s.ownership_edges,
     };
     // Trang HTML có sẵn số dự phòng để vẫn đọc được khi backend chưa chạy — ở đây chỉ
     // ghi đè bằng số THẬT lấy từ Neo4j và Qdrant.
